@@ -60,6 +60,18 @@ class BiliApiError(RuntimeError):
         return self.code is not None and self.code in RISK_CODES
 
 
+class BiliCooldownError(BiliApiError):
+    """风控冷却中：调用方应等待，而不是换接口继续重试。
+
+    ``retry_after`` 是需要等待的秒数。批量轮询遇到它应当整轮跳过，
+    逐个订阅重试只会让冷却时间更长。
+    """
+
+    def __init__(self, message: str, *, retry_after: float = 0.0, endpoint: str = "") -> None:
+        super().__init__(message, code=-412, endpoint=endpoint)
+        self.retry_after = float(retry_after)
+
+
 @dataclass(slots=True)
 class LiveRoomSnapshot:
     room_id: int
@@ -170,8 +182,11 @@ class BiliClient:
         self._empty_retry_used = False
         self._lock = asyncio.Lock()
         self._cooldown_until = 0.0
+        self._risk_strikes = 0
+        self._log_cache: dict[str, float] = {}
         self._last_request = 0.0
-        self._min_interval = 0.35
+        # 匿名访问时请求太密很容易触发风控：默认请求间隔放到 0.6 秒
+        self._min_interval = 0.6
         self.stats = {"requests": 0, "errors": 0, "risk": 0}
 
     # ---------------------------------------------------------------- 生命周期
@@ -228,6 +243,14 @@ class BiliClient:
         except Exception:  # pragma: no cover - 日志失败不影响业务
             pass
 
+    def _log_once(self, key: str, level: str, message: str, *, window: float = 600.0) -> None:
+        """同一条风控提示最多每 window 秒记一次，避免轮询把日志刷满。"""
+        now = time.monotonic()
+        if now - self._log_cache.get(key, 0.0) < window:
+            return
+        self._log_cache[key] = now
+        self._log(level, message)
+
     async def _throttle(self) -> None:
         now = time.monotonic()
         wait = self._min_interval - (now - self._last_request)
@@ -281,10 +304,11 @@ class BiliClient:
     ) -> Any:
         if self._client is None:
             raise BiliApiError("客户端尚未启动", endpoint=url)
-        now = time.monotonic()
-        if now < self._cooldown_until:
-            wait = self._cooldown_until - now
-            raise BiliApiError(f"风控冷却中，还需等待 {wait:.0f} 秒", code=-412, endpoint=url)
+        remaining = self.cooldown_remaining
+        if remaining > 0:
+            raise BiliCooldownError(
+                f"风控冷却中，还需等待 {remaining:.0f} 秒", retry_after=remaining, endpoint=url
+            )
         await self._throttle()
         headers = {"Referer": referer, "Origin": origin, "Cookie": self.cookie_header()}
         self.stats["requests"] += 1
@@ -312,17 +336,28 @@ class BiliClient:
                 return body if return_body else body.get("data")
             if code in RISK_CODES:
                 self.stats["risk"] += 1
-                self._enter_cooldown(300)
+                # -352 多是「请求太快」的软风控，冷却短一点；-412 等按硬风控处理
+                self._enter_cooldown(90 if int(code) == -352 else 600)
             raise BiliApiError(str(body.get("message") or f"接口返回 {code}"), code=int(code), endpoint=url)
+        # 成功一次就把连续风控计数清零，避免偶发抖动把冷却越滚越长
+        self._risk_strikes = 0
         if not expect_json or return_body:
             return body
         return body.get("data")
 
-    def _enter_cooldown(self, seconds: float) -> None:
+    def _enter_cooldown(self, base_seconds: float) -> None:
+        """连续命中风控时指数退避，避免「一撞再撞」把冷却越拖越长。"""
+        self._risk_strikes = min(self._risk_strikes + 1, 5)
+        seconds = min(float(base_seconds) * (2 ** (self._risk_strikes - 1)), 1800.0)
         until = time.monotonic() + seconds
         if until > self._cooldown_until:
             self._cooldown_until = until
-            self._log("warning", f"B 站风控触发，暂停请求 {seconds:.0f} 秒")
+            self._log_once("cooldown", "warning", f"B 站风控触发，暂停请求 {seconds:.0f} 秒")
+
+    @property
+    def cooldown_remaining(self) -> float:
+        """距冷却结束还剩多少秒（0 表示可以正常请求）。"""
+        return max(0.0, self._cooldown_until - time.monotonic())
 
     # ---------------------------------------------------------------- WBI
     async def _wbi_keys(self, *, force: bool = False) -> tuple[str, str]:
@@ -421,8 +456,13 @@ class BiliClient:
                     "follower": payload.get("follower"),
                     "level": ((card.get("level_info") or {}).get("current_level")),
                 }
+        except BiliCooldownError:
+            # 冷却中换接口重试没有意义，只会让冷却更久
+            raise
         except BiliApiError as exc:
-            self._log("warning", f"card 接口失败，改用空间接口 uid={mid}: {exc}")
+            self._log_once(
+                f"card:{mid}", "warning", f"card 接口失败，改用空间接口 uid={mid}: {exc}"
+            )
         data = await self._signed(
             "/x/space/wbi/acc/info",
             {
@@ -473,31 +513,50 @@ class BiliClient:
         return dict(data or {})
 
     async def resolve_profile(self, uid: int) -> UpProfile:
-        """聚合昵称/头像/粉丝数/直播间号；任何一步失败都不影响其余字段。"""
+        """聚合昵称/头像/粉丝数/直播间号。
+
+        单个接口失败不影响其余字段；但**一旦进入风控冷却就立刻停止**——
+        继续换接口重试只会把冷却时间拖得更长（这正是「card 失败换空间接口再失败」
+        的根源）。
+        """
         profile = UpProfile(uid=uid)
+
+        # 1) card 接口一次性给昵称 / 头像 / 粉丝数
         try:
             info = await self.fetch_account_info(uid)
+        except BiliCooldownError:
+            raise
         except BiliApiError as exc:
-            self._log("warning", f"获取 UP 主资料失败 uid={uid}: {exc}")
+            self._log_once(f"profile:{uid}", "warning", f"获取 UP 主资料失败 uid={uid}: {exc}")
             info = {}
         profile.name = str(info.get("name") or "")
         profile.face = _https(str(info.get("face") or ""))
         profile.sign = str(info.get("sign") or "")
         if info.get("follower") is not None:
             profile.follower = _to_int(info.get("follower"), 0)
+
+        # 2) 直播间号 + 备用昵称/粉丝数
         try:
             master = await self.fetch_live_master(uid)
+        except BiliCooldownError:
+            raise
         except BiliApiError:
             master = {}
         if master.get("room_id"):
             profile.room_id = _to_int(master["room_id"], 0) or None
+        if not profile.name:
+            profile.name = str((master.get("info") or {}).get("uname") or "")
         if master.get("follower_num") is not None and profile.follower is None:
             profile.follower = _to_int(master["follower_num"], 0)
+
+        # 3) 还缺粉丝数才去查关系接口（能少一次请求就少一次）
         if profile.follower is None:
             try:
                 stat = await self.fetch_relation_stat(uid)
                 if stat.get("follower") is not None:
                     profile.follower = _to_int(stat["follower"], 0)
+            except BiliCooldownError:
+                raise
             except BiliApiError:
                 pass
         return profile

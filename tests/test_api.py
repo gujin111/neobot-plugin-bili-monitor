@@ -86,3 +86,122 @@ def test_risk_codes_are_classified(api):
     error = api.BiliApiError("risk", code=-352)
     assert error.is_risk is True
     assert api.BiliApiError("other", code=-101).is_risk is False
+
+
+# ---------------------------------------------------------------- 风控冷却
+class FakeResponse:
+    def __init__(self, payload, status=200):
+        self.status_code = status
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class FakeHttp:
+    """假的 httpx.AsyncClient：按顺序返回预设响应。"""
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def request(self, *_args, **_kwargs):
+        self.calls += 1
+        item = self.responses.pop(0) if self.responses else {"code": 0, "data": {}}
+        if isinstance(item, FakeResponse):
+            return item
+        return FakeResponse(item)
+
+    async def aclose(self):
+        return None
+
+
+def _client_with(api, *responses):
+    client = api.BiliClient(timeout=5)
+    client._client = FakeHttp(*responses)
+    client._buvid_ready = True
+    client._min_interval = 0
+    return client
+
+
+async def test_soft_risk_352_enters_short_cooldown(api):
+    client = _client_with(api, {"code": -352, "message": "风控校验失败"})
+
+    with pytest.raises(api.BiliApiError) as caught:
+        await client._request("GET", "https://api.bilibili.com/x/web-interface/card")
+
+    assert caught.value.code == -352
+    # 第一次 -352 冷却 90 秒
+    assert 0 < client.cooldown_remaining <= 90
+
+
+async def test_hard_risk_412_enters_long_cooldown(api):
+    client = _client_with(api, {"code": -412, "message": "请求被拦截"})
+
+    with pytest.raises(api.BiliApiError):
+        await client._request("GET", "https://api.bilibili.com/x/web-interface/card")
+
+    assert client.cooldown_remaining > 500
+
+
+async def test_request_during_cooldown_raises_cooldown_error(api):
+    client = _client_with(api, {"code": -352, "message": "风控"})
+    with pytest.raises(api.BiliApiError):
+        await client._request("GET", "https://api.bilibili.com/x/web-interface/card")
+
+    with pytest.raises(api.BiliCooldownError) as caught:
+        await client._request("GET", "https://api.bilibili.com/x/web-interface/card")
+
+    assert caught.value.retry_after > 0
+    assert caught.value.is_risk is True
+
+
+async def test_cooldown_escalates_on_repeated_risk(api):
+    client = _client_with(api)
+    client._enter_cooldown(90)
+    first = client.cooldown_remaining
+    client._enter_cooldown(90)
+    assert client.cooldown_remaining > first
+
+
+async def test_success_resets_risk_strikes(api):
+    client = _client_with(api, {"code": -352, "message": "风控"}, {"code": 0, "data": {"ok": 1}})
+    with pytest.raises(api.BiliApiError):
+        await client._request("GET", "https://api.bilibili.com/x/a")
+    assert client._risk_strikes == 1
+
+    client._cooldown_until = 0  # 手动解除冷却，模拟冷却已过
+    assert await client._request("GET", "https://api.bilibili.com/x/b") == {"ok": 1}
+    assert client._risk_strikes == 0
+
+
+async def test_card_failure_propagates_cooldown(api, monkeypatch):
+    client = _client_with(api)
+    client._cooldown_until = 0
+
+    async def fake_card(*_args, **_kwargs):
+        raise api.BiliCooldownError("风控冷却中", retry_after=88)
+
+    monkeypatch.setattr(client, "_request", fake_card)
+    with pytest.raises(api.BiliCooldownError):
+        await client.fetch_account_info(1)
+
+
+async def test_resolve_profile_stops_at_cooldown(api, monkeypatch):
+    client = _client_with(api)
+    called: list[str] = []
+
+    async def fail_account(mid):
+        called.append("account")
+        raise api.BiliCooldownError("风控冷却中", retry_after=60)
+
+    async def record_master(mid):
+        called.append("master")
+        return {}
+
+    monkeypatch.setattr(client, "fetch_account_info", fail_account)
+    monkeypatch.setattr(client, "fetch_live_master", record_master)
+
+    with pytest.raises(api.BiliCooldownError):
+        await client.resolve_profile(546195)
+    assert called == ["account"]        # 冷却后不再换接口重试

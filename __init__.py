@@ -21,7 +21,7 @@ from typing import Any
 
 from neobot_modloader import Migration, MessageChain, Plugin, Reply
 
-from .bili_api import BiliApiError, BiliClient
+from .bili_api import BiliApiError, BiliClient, BiliCooldownError, UpProfile
 from .bili_config import BiliMonitorConfig
 from .bili_engine import MonitorEngine
 from .bili_model import DYNAMIC_KINDS, format_count, format_duration
@@ -36,7 +36,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -386,11 +386,21 @@ async def _admin_add(runtime: _Runtime, command_ctx: Any, args: list[str]) -> st
     if await runtime.store.count_subscriptions() >= limit:
         return f"订阅数已达上限 {limit}，请先取消一些或调大「订阅上限」配置。"
 
+    profile: Any = None
+    note = ""
     try:
         profile = await runtime.api.resolve_profile(uid)
+    except BiliCooldownError as exc:
+        # 风控冷却时不要「换个接口再试」：先把订阅建起来，资料等冷却结束再补
+        note = (
+            f"B 站风控冷却中（还需 {exc.retry_after:.0f} 秒），资料暂时取不到；"
+            f"冷却结束后请发 /b站管理 sync {uid} 补全昵称、头像和直播间号。"
+        )
     except BiliApiError as exc:
-        return f"查询 UP 主资料失败：{exc}"
-    if not profile.name:
+        note = f"资料获取失败（{exc}），稍后可发 /b站管理 sync {uid} 重试。"
+    if profile is None:
+        profile = UpProfile(uid=uid)
+    if not profile.name and not note:
         return f"没有找到 UID {uid} 对应的 UP 主（可能不存在或接口风控），请稍后重试。"
 
     room_id: int | None = profile.room_id
@@ -406,17 +416,20 @@ async def _admin_add(runtime: _Runtime, command_ctx: Any, args: list[str]) -> st
         at_all=bool(runtime.config.at_all),
     )
     await runtime.store.add_target(sub.id, _conv_kind(command_ctx), _conv_id(command_ctx))
-    baseline = await runtime.engine.bootstrap(sub)
+    baseline = await runtime.engine.bootstrap(sub, profile=profile)
 
     lines = [
-        f"已开始监控 {profile.name}（UID {uid}）。",
+        f"已开始监控 {sub.display_name}（UID {uid}）。",
         f"头像：{'已获取' if profile.face else '无'} | 直播间：{room_id or '无'}",
         f"提醒类别：{'、'.join(CATEGORY_LABELS[key] for key in sorted(sub.category_set))}",
         f"推送目标：{_conv_kind(command_ctx)} {_conv_id(command_ctx)}",
         f"基线：动态 {baseline.get('dynamic', 0)} 条 / 直播状态 {baseline.get('live', '未知')}"
         f" / 粉丝 {format_count(baseline.get('follower', 0))}",
-        "从现在开始的新动态会推送到这里；用 /b站管理 test 发一条测试提醒验证链路。",
     ]
+    if note:
+        lines.append(f"提示：{note}")
+    else:
+        lines.append("从现在开始的新动态会推送到这里；用 /b站管理 test 发一条测试提醒验证链路。")
     return "\n".join(lines)
 
 
@@ -628,6 +641,11 @@ async def _admin_check(runtime: _Runtime, command_ctx: Any, args: list[str]) -> 
     sub, error = await _resolve_sub(runtime, args[0] if args else "")
     if sub is None:
         return error
+    if runtime.api.cooldown_remaining > 0:
+        return (
+            f"B 站风控冷却中，还需 {runtime.api.cooldown_remaining:.0f} 秒才能检查。\n"
+            "冷却期间建议先填 Cookie（面板配置）或 /b站登录 qr，能明显降低触发概率。"
+        )
     await runtime.engine.poll_now(sub)
     sub = await runtime.store.get_subscription(sub.uid) or sub
     return f"已立即检查一次。\n{await _info_text(runtime, sub)}"
@@ -639,6 +657,8 @@ async def _admin_sync(runtime: _Runtime, command_ctx: Any, args: list[str]) -> s
         return error
     try:
         profile = await runtime.api.resolve_profile(sub.uid)
+    except BiliCooldownError as exc:
+        return f"B 站风控冷却中，还需 {exc.retry_after:.0f} 秒，稍后再发 /b站管理 sync {sub.uid}。"
     except BiliApiError as exc:
         return f"刷新失败：{exc}"
     if not profile.name:
@@ -726,7 +746,10 @@ async def _status_text(runtime: _Runtime) -> str:
     ]
     if stats.get("last_error"):
         lines.append(f"最近错误：{stats['last_error']}")
-    if not enabled:
+    cooldown = float(getattr(runtime.api, "cooldown_remaining", 0.0) or 0.0)
+    if cooldown > 0:
+        lines.append(f"⚠ 风控冷却中：约 {cooldown:.0f} 秒后恢复轮询（期间不会请求接口）")
+    elif not enabled:
         lines.append("提示：当前没有启用的订阅，用 /b站管理 add <uid> 添加。")
     return "\n".join(lines)
 
@@ -735,6 +758,8 @@ async def _status_text(runtime: _Runtime) -> str:
 async def _start_qr_login(runtime: _Runtime, command_ctx: Any) -> str:
     try:
         session, image_url = await runtime.api.qr_generate(runtime.config.qr_image_service)
+    except BiliCooldownError as exc:
+        return f"B 站风控冷却中，还需 {exc.retry_after:.0f} 秒，稍后再试。"
     except BiliApiError as exc:
         return f"生成二维码失败：{exc}"
 

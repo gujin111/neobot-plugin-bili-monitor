@@ -143,8 +143,8 @@ async def test_command_dispatch_add_and_list(loaded_plugin, monkeypatch):
 
     baseline_calls = []
 
-    async def fake_bootstrap(sub):
-        baseline_calls.append(sub.uid)
+    async def fake_bootstrap(sub, *, profile=None):
+        baseline_calls.append((sub.uid, profile is not None))
         return {"dynamic": 3, "live": "未开播", "follower": 1234}
 
     monkeypatch.setattr(runtime.api, "resolve_profile", fake_profile)
@@ -160,7 +160,7 @@ async def test_command_dispatch_add_and_list(loaded_plugin, monkeypatch):
     admin = registry.commands["b站管理"]
     reply = await admin.handler(FakeCtx())
     assert "已开始监控" in reply
-    assert baseline_calls == [546195]
+    assert baseline_calls == [(546195, True)]     # 资料被复用给基线，少两次请求
 
     stored = await runtime.store.get_subscription(546195)
     assert stored is not None

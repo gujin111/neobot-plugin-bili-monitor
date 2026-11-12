@@ -16,7 +16,7 @@ import random
 import time
 from typing import Any, Protocol
 
-from .bili_api import BiliApiError, BiliClient, LiveRoomSnapshot
+from .bili_api import BiliApiError, BiliClient, BiliCooldownError, LiveRoomSnapshot
 from .bili_model import (
     DYNAMIC_KINDS,
     MonitorEvent,
@@ -71,9 +71,10 @@ class MonitorEngine:
         self._failures: dict[int, int] = {}
         self._gate_lock = asyncio.Lock()
         self._last_push = 0.0
+        self._cooldown_logged = 0.0
         self.stats = {
             "cycles": 0, "events": 0, "pushed": 0, "skipped": 0,
-            "failed": 0, "last_error": "", "last_push_at": 0.0,
+            "failed": 0, "last_error": "", "last_push_at": 0.0, "cooldown_left": 0,
         }
 
     # ---------------------------------------------------------------- 生命周期
@@ -151,6 +152,8 @@ class MonitorEngine:
 
     # ---------------------------------------------------------------- 动态
     async def _dynamic_tick(self) -> None:
+        if self._skip_for_cooldown():
+            return
         subs = await self._due_subscriptions("dynamic", self._config.dynamic_interval_seconds)
         for sub in subs:
             if not (sub.category_set & set(DYNAMIC_KINDS)):
@@ -206,6 +209,8 @@ class MonitorEngine:
 
     # ---------------------------------------------------------------- 直播
     async def _live_tick(self) -> None:
+        if self._skip_for_cooldown():
+            return
         subs = await self._due_subscriptions("live", self._config.live_interval_seconds)
         for sub in subs:
             if not (sub.category_set & {"live_on", "live_off"}):
@@ -283,6 +288,8 @@ class MonitorEngine:
 
     # ---------------------------------------------------------------- 粉丝
     async def _follower_tick(self) -> None:
+        if self._skip_for_cooldown():
+            return
         subs = await self._due_subscriptions("follower", self._config.follower_interval_seconds)
         for sub in subs:
             if "follower" not in sub.category_set:
@@ -317,6 +324,9 @@ class MonitorEngine:
             self._failures.pop(sub.id, None)
         except asyncio.CancelledError:
             raise
+        except BiliCooldownError as exc:
+            # 冷却不是这个订阅的错：不计失败次数、不逐个订阅刷日志
+            self.stats["cooldown_left"] = int(exc.retry_after)
         except BiliApiError as exc:
             self._failures[sub.id] = self._failures.get(sub.id, 0) + 1
             self.stats["failed"] += 1
@@ -327,6 +337,18 @@ class MonitorEngine:
             self.stats["failed"] += 1
             self.stats["last_error"] = f"{sub.display_name}: {type(exc).__name__}"
             self._log("error", f"{sub.display_name} 轮询异常：{type(exc).__name__}: {exc}")
+
+    def _skip_for_cooldown(self) -> bool:
+        """风控冷却期间整轮跳过，避免把冷却越撞越长。"""
+        remaining = float(getattr(self._api, "cooldown_remaining", 0.0) or 0.0)
+        if remaining <= 0:
+            return False
+        self.stats["cooldown_left"] = int(remaining)
+        now = time.monotonic()
+        if now - self._cooldown_logged > 300:
+            self._cooldown_logged = now
+            self._log("warning", f"B 站风控冷却中（剩余 {remaining:.0f} 秒），本轮跳过")
+        return True
 
     async def _dispatch(self, sub: Subscription, event: MonitorEvent) -> bool:
         """把单个事件推给订阅的所有目标；全部成功返回 True。"""
@@ -390,15 +412,26 @@ class MonitorEngine:
             self._last_push = time.monotonic()
 
     # ---------------------------------------------------------------- 对外
-    async def bootstrap(self, sub: Subscription) -> dict[str, Any]:
-        """新订阅建立基线：记录当前最新动态/直播状态/粉丝数，不推送历史内容。"""
+    async def bootstrap(self, sub: Subscription, *, profile: Any = None) -> dict[str, Any]:
+        """新订阅建立基线：记录当前最新动态/直播状态/粉丝数，不推送历史内容。
+
+        ``profile`` 是添加订阅时已经取到的资料：带上它就能少两次请求
+        （粉丝数、直播间号不必重复查），被风控的概率也低一些。
+        一旦触发风控冷却，剩下步骤直接跳过，等冷却结束由下一轮轮询补上。
+        """
         result: dict[str, Any] = {"dynamic": 0, "live": "未知", "follower": 0}
+        follower_hint = int(getattr(profile, "follower", 0) or 0) if profile is not None else 0
+        if follower_hint and sub.id:
+            await self._store.set_cursor(sub.id, "follower", str(follower_hint))
+            result["follower"] = follower_hint
         try:
             items = await self._api.fetch_dynamic_feed(sub.uid)
             ids = [dynamic_id(item) for item in items if not is_pinned(item)]
             if ids:
                 await self._store.set_cursor(sub.id, "dynamic", str(max(ids)))
                 result["dynamic"] = len(ids)
+        except BiliCooldownError:
+            return result
         except BiliApiError as exc:
             self._log("warning", f"{sub.display_name} 建立动态基线失败：{exc}")
         try:
@@ -416,20 +449,28 @@ class MonitorEngine:
                     },
                 )
                 result["live"] = "直播中" if snapshot.is_living else "未开播"
+        except BiliCooldownError:
+            return result
         except BiliApiError as exc:
             self._log("warning", f"{sub.display_name} 建立直播基线失败：{exc}")
+        if follower_hint:
+            return result
         try:
             stat = await self._api.fetch_relation_stat(sub.uid)
             follower = int(stat.get("follower") or 0)
             if follower:
                 await self._store.set_cursor(sub.id, "follower", str(follower))
                 result["follower"] = follower
+        except BiliCooldownError:
+            return result
         except BiliApiError as exc:
             self._log("warning", f"{sub.display_name} 建立粉丝基线失败：{exc}")
         return result
 
     async def poll_now(self, sub: Subscription) -> None:
         """立即检查一次（/b站管理 check 用），走与定时轮询相同的逻辑。"""
+        if self._skip_for_cooldown():
+            return
         if sub.category_set & set(DYNAMIC_KINDS):
             await self._guard(sub, self._poll_dynamic)
         if sub.category_set & {"live_on", "live_off"}:

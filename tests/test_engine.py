@@ -78,9 +78,17 @@ class FakeApi:
         self.followers: dict[int, int] = {}
         self.feed_calls = 0
         self.stats = {"requests": 0, "errors": 0, "risk": 0}
+        #: 模拟风控冷却（秒），>0 时引擎应整轮跳过
+        self.cooldown_remaining = 0.0
+        #: 模拟接口抛 BiliCooldownError
+        self.raise_cooldown = False
 
     async def fetch_dynamic_feed(self, mid):
+        from bili_monitor.bili_api import BiliCooldownError
+
         self.feed_calls += 1
+        if self.raise_cooldown:
+            raise BiliCooldownError("风控冷却中，还需等待 90 秒", retry_after=90)
         return list(self.dynamics.get(mid, []))
 
     async def fetch_live_room(self, room_id):
@@ -90,6 +98,7 @@ class FakeApi:
         return {"room_id": 555, "follower_num": 100}
 
     async def fetch_relation_stat(self, mid):
+        self.relation_calls = getattr(self, "relation_calls", 0) + 1
         return {"follower": self.followers.get(mid, 0)}
 
 
@@ -444,14 +453,15 @@ async def test_push_gap_is_respected(engine_mod, store_mod):
     import time
 
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    engine = build_engine(engine_mod, store, api, sender, make_config(push_gap_seconds=0.15))
+    engine = build_engine(engine_mod, store, api, sender, make_config(push_gap_seconds=0.25))
     sub = make_sub(store_mod)
 
     start = time.monotonic()
     await engine._dispatch(sub, _event_from(engine_mod, api))
     store.claimed.clear()
     await engine._dispatch(sub, _event_from(engine_mod, api))
-    assert time.monotonic() - start >= 0.14
+    # 两次发送之间至少间隔一个 push_gap（留一点调度误差）
+    assert time.monotonic() - start >= 0.2
 
 
 async def test_snapshot_reports_stats(engine_mod, store_mod):
@@ -471,3 +481,71 @@ async def test_all_send_modes_work_without_cards(engine_mod, store_mod, mode):
     sub.send_mode = mode
     await engine._dispatch(sub, _event_from(engine_mod, api))
     assert len(sender.sent) == 1
+
+
+# ---------------------------------------------------------------- 风控冷却
+async def test_tick_skips_whole_cycle_during_cooldown(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.cooldown_remaining = 120.0
+    api.dynamics[546195] = [make_item(ident="200")]
+    store.cursors[(1, "dynamic")] = FakeCursor("100")
+    store.subs = [make_sub(store_mod)]
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+
+    await engine._dynamic_tick()
+
+    assert api.feed_calls == 0           # 整轮跳过，不再请求
+    assert sender.sent == []
+    assert engine.snapshot()["cooldown_left"] == 120
+
+
+async def test_cooldown_error_is_not_counted_as_failure(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.raise_cooldown = True
+    store.cursors[(1, "dynamic")] = FakeCursor("100")
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+
+    await engine._guard(make_sub(store_mod), engine._poll_dynamic)
+
+    assert engine.snapshot()["failed"] == 0
+    assert engine.snapshot()["cooldown_left"] == 90
+
+
+async def test_bootstrap_skips_remaining_steps_on_cooldown(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.raise_cooldown = True
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+
+    result = await engine.bootstrap(make_sub(store_mod))
+
+    assert result["dynamic"] == 0
+    assert (1, "dynamic") not in store.cursors
+    assert api.rooms == {}                # 冷却后没有再打直播接口
+
+
+async def test_bootstrap_reuses_profile_hints(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.rooms[555] = SimpleNamespace(
+        room_id=555, live_status=0, title="", cover="", keyframe="", online=0,
+        live_time=0, area_name="", parent_area_name="", is_living=False,
+    )
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    profile = SimpleNamespace(follower=8888, room_id=555, name="老番茄", face="")
+
+    result = await engine.bootstrap(sub, profile=profile)
+
+    assert result["follower"] == 8888
+    assert store.cursors[(1, "follower")].value == "8888"
+    assert getattr(api, "relation_calls", 0) == 0     # 资料里已有粉丝数，不再查关系接口
+
+
+async def test_poll_now_respects_cooldown(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.cooldown_remaining = 30.0
+    store.cursors[(1, "dynamic")] = FakeCursor("100")
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+
+    await engine.poll_now(make_sub(store_mod))
+
+    assert api.feed_calls == 0
