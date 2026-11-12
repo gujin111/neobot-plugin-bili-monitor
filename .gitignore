@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+pytest-cache-files-*/
+.runtime-test/
+.neobot-init-*/
+dist/
+tmp/
+*.db
+*.db-wal
+*.db-shm
+.env
+*.local

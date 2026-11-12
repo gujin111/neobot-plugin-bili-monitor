@@ -1,0 +1,104 @@
+"""把消息链交给 NeoBot 宿主发送，并提供基于宿主截图端口的卡片渲染。
+
+插件不自己持有连接：所有发送都走上下文（``ctx.send`` / ``ctx.send_image``），
+这样机器人重连、协议适配由本体负责。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .bili_model import MonitorEvent
+from .bili_render import card_html
+
+
+def conversation_for(ctx: Any, kind: str, target_id: str) -> Any:
+    """把 ``group`` / ``private`` 目标换成宿主会话对象。
+
+    大多数适配器用纯数字会话号，但协议里并不保证；非数字时原样交给宿主。
+    """
+    try:
+        numeric: Any = int(str(target_id))
+    except (TypeError, ValueError):
+        numeric = str(target_id)
+    if kind == "group":
+        return ctx.conversation_from_event({"message_type": "group", "group_id": numeric})
+    return ctx.conversation_from_event({"message_type": "private", "user_id": numeric})
+
+
+class HostSender:
+    """推送发送器：一条消息一个会话。"""
+
+    def __init__(self, ctx: Any, logger: Any = None) -> None:
+        self._ctx = ctx
+        self._logger = logger
+
+    async def send_chain(self, kind: str, target_id: str, chain: Any) -> bool:
+        conversation = conversation_for(self._ctx, kind, target_id)
+        await self._ctx.send(conversation, chain)
+        return True
+
+    async def send_image(self, kind: str, target_id: str, data: bytes, filename: str) -> bool:
+        conversation = conversation_for(self._ctx, kind, target_id)
+        await self._ctx.send_image(conversation, data=data, filename=filename)
+        return True
+
+
+class HtmlCardRenderer:
+    """调用本体的截图端口把卡片 HTML 渲染成 PNG。
+
+    宿主没开浏览器 / 截图不可用时 ``available`` 为 False，引擎会自动降级成
+    「文本 + 原图」，不会因为渲染失败而丢掉提醒。
+    """
+
+    def __init__(self, ctx: Any, logger: Any = None, *, timeout: float = 25.0) -> None:
+        self._ctx = ctx
+        self._logger = logger
+        self._timeout = timeout
+        self._warned = False
+        self._port = getattr(ctx, "screenshots", None)
+
+    @property
+    def available(self) -> bool:
+        return self._port is not None
+
+    def _warn(self, message: str) -> None:
+        if self._warned or self._logger is None:
+            return
+        self._warned = True
+        try:
+            self._logger.warning(message)
+        except Exception:  # pragma: no cover
+            pass
+
+    async def render(self, event: MonitorEvent, custom: dict[str, str] | None) -> bytes | None:
+        port = self._port
+        if port is None:
+            return None
+        # 截图端口支持软重启换代，每次渲染都重新取一次
+        port = getattr(self._ctx, "screenshots", port)
+        if port is None:
+            return None
+        html = card_html(event, custom=custom)
+        try:
+            from neobot_modloader import RenderOptions, ScreenshotOptions
+
+            result = await port.render(
+                html=html,
+                options=RenderOptions(
+                    screenshot=ScreenshotOptions(
+                        mode="full_page", width=640, height=900, format="png", scale=1.0
+                    ),
+                    wait_for_fonts=False,
+                    wait_for_images=True,
+                    timeout=self._timeout,
+                ),
+            )
+        except ImportError:  # pragma: no cover - 老版本宿主没有截图契约
+            self._warn("宿主未提供截图契约，卡片模式降级为图片模式")
+            return None
+        except Exception as exc:  # noqa: BLE001 - 渲染失败只降级不报错
+            self._warn(f"卡片渲染失败，降级为图片模式：{type(exc).__name__}: {exc}")
+            return None
+        data = getattr(result, "data", None)
+        return bytes(data) if data else None

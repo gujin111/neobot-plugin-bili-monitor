@@ -1,0 +1,215 @@
+{
+  "actions": [],
+  "config": {
+    "description": "B 站监控助手配置。",
+    "properties": {
+      "at_all": {
+        "default": false,
+        "description": "新订阅默认开启 @全体；需要机器人有群管理员权限，否则发送会失败。",
+        "title": "默认 @全体成员",
+        "type": "boolean"
+      },
+      "at_all_on_live_only": {
+        "default": true,
+        "description": "开启后，@全体只作用于开播提醒，动态/下播提醒不带 @。",
+        "title": "仅开播提醒 @全体",
+        "type": "boolean"
+      },
+      "command_prefix": {
+        "default": "/",
+        "title": "命令前缀",
+        "type": "string"
+      },
+      "cookie": {
+        "description": "可选。填入 SESSDATA=...; bili_jct=... 可显著降低风控概率；留空则匿名访问。",
+        "placeholder": "SESSDATA=xxx; bili_jct=yyy",
+        "single_line": true,
+        "title": "B 站登录 Cookie",
+        "type": "string",
+        "writeOnly": true
+      },
+      "dynamic_interval_seconds": {
+        "default": 120,
+        "description": "每个 UP 主每隔这么久检查一次新动态。太小会更快触发风控，建议 90~300。",
+        "maximum": 3600,
+        "minimum": 60,
+        "title": "动态轮询间隔（秒）",
+        "type": "integer"
+      },
+      "event_retention_days": {
+        "default": 7,
+        "description": "用于去重与排障的事件日志保留时长。",
+        "maximum": 90,
+        "minimum": 1,
+        "title": "事件记录保留天数",
+        "type": "integer"
+      },
+      "follower_interval_seconds": {
+        "default": 1800,
+        "description": "粉丝数变化慢，默认半小时一次即可。",
+        "maximum": 86400,
+        "minimum": 300,
+        "title": "粉丝数轮询间隔（秒）",
+        "type": "integer"
+      },
+      "include_link": {
+        "default": true,
+        "title": "附带原文链接",
+        "type": "boolean"
+      },
+      "live_interval_seconds": {
+        "default": 90,
+        "description": "检查开播/下播状态的间隔，建议 60~180。",
+        "maximum": 1800,
+        "minimum": 30,
+        "title": "直播轮询间隔（秒）",
+        "type": "integer"
+      },
+      "max_events_per_cycle": {
+        "default": 6,
+        "description": "一次轮询里最多推送多少条新动态，超出的会跳过并记日志，避免刷屏。",
+        "maximum": 20,
+        "minimum": 1,
+        "title": "单轮最多推送条数",
+        "type": "integer"
+      },
+      "max_subscriptions": {
+        "default": 30,
+        "description": "同时监控的 UP 主数量上限。",
+        "maximum": 200,
+        "minimum": 1,
+        "title": "订阅上限",
+        "type": "integer"
+      },
+      "max_text_chars": {
+        "default": 180,
+        "description": "动态正文超过这个长度会截断并加省略号。",
+        "maximum": 1000,
+        "minimum": 40,
+        "title": "正文截断长度",
+        "type": "integer"
+      },
+      "proxy": {
+        "default": "",
+        "description": "形如 http://127.0.0.1:7890；留空直连。",
+        "single_line": true,
+        "title": "请求代理",
+        "type": "string"
+      },
+      "push_gap_seconds": {
+        "default": 3.0,
+        "description": "两条提醒之间的最小间隔，用于规避消息屏蔽。设为 0 表示不限速。",
+        "maximum": 120,
+        "minimum": 0,
+        "title": "推送间隔（秒）",
+        "type": "number"
+      },
+      "qr_image_service": {
+        "default": "https://api.qrserver.com/v1/create-qr-code/?size=360x360&data={data}",
+        "description": "扫码登录时把二维码内容转成图片的地址模板，{data} 会被替换成编码后的内容；留空则只发链接。",
+        "single_line": true,
+        "title": "二维码图片服务",
+        "type": "string"
+      },
+      "request_timeout_seconds": {
+        "default": 15,
+        "maximum": 120,
+        "minimum": 5,
+        "title": "请求超时（秒）",
+        "type": "integer"
+      },
+      "send_mode": {
+        "default": "auto",
+        "description": "auto=有配图就发图、否则纯文本；text=只发文本；image=文本+原图；card=渲染卡片图（依赖本体截图能力）。",
+        "enum": [
+          "auto",
+          "text",
+          "image",
+          "card"
+        ],
+        "title": "默认发送模式",
+        "type": "string"
+      },
+      "user_agent": {
+        "default": "",
+        "description": "留空使用内置的 Chrome UA；一般不需要改。",
+        "single_line": true,
+        "title": "自定义 User-Agent",
+        "type": "string"
+      }
+    },
+    "title": "BiliMonitorConfig",
+    "type": "object"
+  },
+  "guides": [
+    {
+      "completion_action": null,
+      "demo": {
+        "config": {
+          "dynamic_interval_seconds": 120,
+          "live_interval_seconds": 90
+        }
+      },
+      "id": "first-use",
+      "steps": [
+        {
+          "chapter": "打开配置",
+          "example": {
+            "dynamic_interval_seconds": 120,
+            "live_interval_seconds": 90
+          },
+          "form": "start",
+          "target": "config",
+          "text": "在插件管理里选择本插件并打开配置表单。下面演示的是公开默认值，不会修改你的真实配置。"
+        },
+        {
+          "chapter": "填写登录 Cookie（可选）",
+          "example": {
+            "cookie": "SESSDATA=example; bili_jct=example"
+          },
+          "form": "edit",
+          "target": "config.cookie",
+          "text": "填 SESSDATA=...; bili_jct=... 可以显著降低被风控的概率；留空则匿名访问。也可以稍后用 /b站登录 qr 扫码获取。"
+        },
+        {
+          "chapter": "保存配置",
+          "example": {
+            "dynamic_interval_seconds": 120,
+            "live_interval_seconds": 90
+          },
+          "form": "save",
+          "target": "config",
+          "text": "保存后插件会重载一次，新的轮询间隔立即生效。"
+        },
+        {
+          "chapter": "添加第一个订阅",
+          "command": {
+            "context": "在群聊中 @机器人 发送",
+            "reply": "已开始监控 …（UID 2）",
+            "text": "/b站管理 add 2"
+          },
+          "target": "config",
+          "text": "在群里 @机器人 发送 /b站管理 add <UID>，机器人会把提醒推送到当前群。UID 可以从 space.bilibili.com/123456 里取。"
+        },
+        {
+          "chapter": "查看订阅与状态",
+          "command": {
+            "context": "在群聊中 @机器人 发送",
+            "reply": "当前监控 1 个 UP 主：…",
+            "text": "/b站监控 list"
+          },
+          "target": "config",
+          "text": "用 /b站监控 list 看列表，/b站监控 status 看轮询与推送统计。"
+        }
+      ],
+      "title": "从零配置 B 站监控"
+    }
+  ],
+  "plugin": {
+    "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
+    "name": "bili_monitor",
+    "version": "1.0.0"
+  },
+  "resources": [],
+  "schema_version": 1
+}

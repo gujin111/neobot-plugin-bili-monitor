@@ -1,0 +1,60 @@
+name = "bili_monitor"
+version = "1.0.0"
+description = "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）"
+author = "bili_monitor contributors"
+license = "MIT"
+tags = ["bilibili", "monitor", "notification"]
+repo = "https://github.com/gujin111/neobot-plugin-bili-monitor"
+branch = "main"
+homepage = "https://github.com/gujin111/neobot-plugin-bili-monitor#readme"
+python_dependencies = [
+    "httpx>=0.27,<0.29",
+    "sqlalchemy>=2.0,<3",
+    "aiosqlite>=0.20,<0.23",
+    "pydantic>=2,<3",
+]
+hot_reload = true
+config_hot_reload = false
+min_neobot_version = "2.1.0"
+
+[config]
+# 命令前缀；群聊里仍需 @机器人
+command_prefix = "/"
+# B 站登录 Cookie（可选）：SESSDATA=...; bili_jct=...
+cookie = ""
+# 自定义 User-Agent，留空使用内置 Chrome UA
+user_agent = ""
+# 请求代理，例如 http://127.0.0.1:7890
+proxy = ""
+# 单次接口请求超时（秒）
+request_timeout_seconds = 15
+# 动态轮询间隔（秒）
+dynamic_interval_seconds = 120
+# 直播轮询间隔（秒）
+live_interval_seconds = 90
+# 粉丝数轮询间隔（秒）
+follower_interval_seconds = 1800
+# 同时监控的 UP 主上限
+max_subscriptions = 30
+# 默认发送模式：auto / text / image / card
+send_mode = "auto"
+# 两条提醒之间的最小间隔（秒），用于规避消息屏蔽
+push_gap_seconds = 3.0
+# 单轮最多推送条数，超出的跳过
+max_events_per_cycle = 6
+# 新订阅默认开启 @全体成员
+at_all = false
+# @全体成员只作用于开播提醒
+at_all_on_live_only = true
+# 提醒里附带原文链接
+include_link = true
+# 正文截断长度
+max_text_chars = 180
+# 二维码图片服务地址模板，{data} 会被替换成编码后的二维码内容
+qr_image_service = "https://api.qrserver.com/v1/create-qr-code/?size=360x360&data={data}"
+# 事件去重记录保留天数
+event_retention_days = 7
+
+[sdk]
+version = 1
+contract = "plugin.contract.json"
