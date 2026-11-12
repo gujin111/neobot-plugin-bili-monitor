@@ -131,3 +131,32 @@ def test_summary_line(render, model):
     event = _event(model, title="标题")
     assert "新动态" in render.summary_line(event)
     assert "老番茄" in render.summary_line(event)
+
+
+# ---------------------------------------------------------------- 命令速查图
+def test_help_html_contains_every_command(render):
+    import html as html_lib
+
+    html = render.help_html(version="9.9.9")
+    for _title, _color, items in render.HELP_GROUPS:
+        for syntax, desc in items:
+            assert html_lib.escape(syntax) in html
+            assert html_lib.escape(desc) in html
+    assert "v9.9.9" in html
+    assert "<script" not in html.lower()
+
+
+def test_help_html_escapes_command_text(render):
+    html = render.help_html()
+    # `|` 之类不算特殊字符，但尖括号必须转义（命令里有 <uid>）
+    assert "&lt;uid" in html
+    assert "<uid" not in html.split("<body")[1]
+
+
+def test_help_text_lists_all_groups(render):
+    text = render.help_text()
+    for title, _color, items in render.HELP_GROUPS:
+        assert title in text
+        for syntax, _desc in items:
+            assert syntax in text
+    assert "@机器人" in text

@@ -324,3 +324,58 @@ async def test_unpush_removes_target(loaded_plugin, monkeypatch):
     stored = await runtime.store.get_subscription(546195)
     assert stored.targets == []
     await pkg.plugin.on_stop()
+
+
+# ---------------------------------------------------------------- 命令速查图
+async def test_help_sends_image_when_renderer_available(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    calls: list[tuple] = []
+
+    async def fake_render(html, **kwargs):
+        calls.append(("render", "<!DOCTYPE html>" in html, len(html)))
+        return b"\x89PNG-fake"
+
+    async def fake_send_image(conversation, *, data, filename):
+        calls.append(("image", conversation.kind, conversation.id, filename, len(data)))
+        return None
+
+    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
+    monkeypatch.setattr(runtime.ctx, "send_image", fake_send_image)
+
+    result = await registry.commands["b站监控"].handler(_Ctx("help"))
+
+    assert result is None, "发图后应返回 None，避免宿主再发一遍文本"
+    assert calls[0][0] == "render" and calls[0][1] is True
+    assert calls[1] == ("image", "group", "123456", "bili-help.png", len(b"\x89PNG-fake"))
+    await pkg.plugin.on_stop()
+
+
+async def test_help_falls_back_to_text(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+
+    # 宿主没有截图能力时 render_html 返回 None
+    text = await registry.commands["b站监控"].handler(_Ctx("help"))
+
+    assert isinstance(text, str)
+    assert "/b站管理" in text and "add <uid" in text
+    await pkg.plugin.on_stop()
+
+
+async def test_admin_help_uses_image_too(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    calls: list[str] = []
+
+    async def fake_render(html, **kwargs):
+        calls.append("render")
+        return b"png"
+
+    async def fake_send_image(conversation, *, data, filename):
+        calls.append("image")
+        return None
+
+    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
+    monkeypatch.setattr(runtime.ctx, "send_image", fake_send_image)
+
+    assert await registry.commands["b站管理"].handler(_Ctx("help")) is None
+    assert calls == ["render", "image"]
+    await pkg.plugin.on_stop()

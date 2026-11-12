@@ -240,13 +240,132 @@ def describe_template_fields(kind: str) -> str:
     return "、".join("{" + name + "}" for name in fields)
 
 
+# ---------------------------------------------------------------- 命令速查
+#: (分组标题, 强调色, [(命令写法, 一句话说明), ...])
+HELP_GROUPS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "所有人 · 查看",
+        "#00A1D6",
+        (
+            ("/b站监控", "订阅列表（默认）"),
+            ("/b站监控 info <uid>", "单个 UP 的配置与游标"),
+            ("/b站监控 status", "运行状态、推送统计、风控冷却"),
+            ("/b站监控 help", "本图（命令速查）"),
+        ),
+    ),
+    (
+        "管理员 · 订阅与提醒",
+        "#FB7299",
+        (
+            ("/b站管理 add <uid|链接> [直播间号]", "添加监控，推到当前会话"),
+            ("/b站管理 del <uid>", "取消监控"),
+            ("/b站管理 on|off <uid>", "恢复 / 暂停"),
+            ("/b站管理 cat <uid> 动态,视频,开播", "提醒类别（all / none）"),
+            ("/b站管理 mode <uid> auto|text|image|card", "发送模式"),
+            ("/b站管理 tpl <uid> <类别> [模板|clear|?]", "自定义文案"),
+            ("/b站管理 at <uid> on|off", "开播 @全体（需群管理）"),
+            ("/b站管理 atlist <uid> <qq,qq|clear>", "@ 指定成员"),
+        ),
+    ),
+    (
+        "管理员 · 推送目标与排障",
+        "#7C4DFF",
+        (
+            ("/b站管理 targets [uid]", "看推送目标 + 当前群号"),
+            ("/b站管理 bind <uid>", "把当前会话加为推送目标"),
+            ("/b站管理 push <uid> <群号>", "追加群；私聊写 私聊 <QQ>"),
+            ("/b站管理 unpush <uid> <群号>", "移除推送目标"),
+            ("/b站管理 test <uid>", "发一条测试提醒"),
+            ("/b站管理 check <uid>", "立即检查一次"),
+            ("/b站管理 sync <uid>", "刷新昵称 / 头像 / 直播间"),
+        ),
+    ),
+    (
+        "超级管理员 · 账号",
+        "#FFB300",
+        (
+            ("/b站登录 qr", "扫码登录（降低风控）"),
+            ("/b站登录 status", "查看登录状态"),
+            ("/b站登录 logout", "清除本地凭证"),
+        ),
+    ),
+)
+
+
+def help_text() -> str:
+    """纯文本命令表（截图不可用时的回退）。"""
+    lines = ["B 站监控助手 · 命令速查", ""]
+    for title, _color, items in HELP_GROUPS:
+        lines.append(f"【{title}】")
+        for syntax, desc in items:
+            lines.append(f"  {syntax}")
+            lines.append(f"      {desc}")
+        lines.append("")
+    lines.append("群聊里记得先 @机器人；命令前缀默认 /。")
+    return "\n".join(lines).rstrip()
+
+
+def help_html(*, version: str = "") -> str:
+    """命令速查卡片：自包含 HTML，交给本体截图端口渲染成图片。"""
+    blocks: list[str] = []
+    for title, color, items in HELP_GROUPS:
+        rows = "".join(
+            f'<div class="row"><code>{html_escape(syntax)}</code>'
+            f'<span class="desc">{html_escape(desc)}</span></div>'
+            for syntax, desc in items
+        )
+        blocks.append(
+            f'<section class="group">'
+            f'<h2 style="border-left-color:{color}">{html_escape(title)}</h2>'
+            f"{rows}</section>"
+        )
+    version_text = f"v{html_escape(version)}" if version else ""
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8" />
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ width: 760px; background: #f4f6f9;
+          font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2430; }}
+  .card {{ margin: 14px; background: #fff; border-radius: 18px; overflow: hidden;
+           box-shadow: 0 6px 24px rgba(16, 24, 40, .10); }}
+  .head {{ padding: 22px 24px; color: #fff;
+           background: linear-gradient(135deg, #00A1D6 0%, #7C4DFF 100%); }}
+  .head h1 {{ font-size: 22px; font-weight: 700; letter-spacing: .5px; }}
+  .head p {{ font-size: 12.5px; opacity: .9; margin-top: 6px; }}
+  .body {{ padding: 18px 22px 22px; }}
+  .group + .group {{ margin-top: 16px; }}
+  .group h2 {{ font-size: 15px; font-weight: 700; color: #16181c; padding-left: 10px;
+               border-left: 4px solid #00A1D6; margin-bottom: 8px; }}
+  .row {{ display: flex; align-items: baseline; gap: 12px; padding: 7px 10px;
+          border-radius: 8px; }}
+  .row:nth-child(odd) {{ background: #f7f9fc; }}
+  code {{ flex: 0 0 auto; font-family: Consolas, "Courier New", monospace;
+          font-size: 13px; color: #0b7285; background: #e8f4f8;
+          border-radius: 6px; padding: 3px 8px; }}
+  .desc {{ font-size: 13px; color: #5a6472; line-height: 1.5; }}
+  .foot {{ padding: 0 24px 18px; font-size: 11.5px; color: #98a2b3;
+           display: flex; justify-content: space-between; }}
+</style></head>
+<body><div class="card">
+  <div class="head">
+    <h1>B 站监控助手 · 命令速查</h1>
+    <p>群里先 @机器人，命令前缀默认 / · 分三类权限：所有人 / 管理员 / 超级管理员</p>
+  </div>
+  <div class="body">{''.join(blocks)}</div>
+  <div class="foot"><span>bili_monitor</span><span>{version_text}</span></div>
+</div></body></html>"""
+
+
 __all__ = [
     "DEFAULT_TEMPLATES",
+    "HELP_GROUPS",
     "TEMPLATE_FIELDS",
     "build_chain",
     "build_fields",
     "card_html",
     "describe_template_fields",
+    "help_html",
+    "help_text",
     "render_text",
     "summary_line",
     "template_for",

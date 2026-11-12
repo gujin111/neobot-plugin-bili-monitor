@@ -107,14 +107,13 @@ class HtmlCardRenderer:
             pass
 
     async def render(self, event: MonitorEvent, custom: dict[str, str] | None) -> bytes | None:
-        port = self._port
+        return await self.render_html(card_html(event, custom=custom))
+
+    async def render_html(self, html: str, *, width: int = 640, height: int = 900) -> bytes | None:
+        """把任意自包含 HTML 渲染成 PNG；任何失败都返回 None，由调用方降级。"""
+        port = getattr(self._ctx, "screenshots", self._port)
         if port is None:
             return None
-        # 截图端口支持软重启换代，每次渲染都重新取一次
-        port = getattr(self._ctx, "screenshots", port)
-        if port is None:
-            return None
-        html = card_html(event, custom=custom)
         try:
             from neobot_modloader import RenderOptions, ScreenshotOptions
 
@@ -122,7 +121,7 @@ class HtmlCardRenderer:
                 html=html,
                 options=RenderOptions(
                     screenshot=ScreenshotOptions(
-                        mode="full_page", width=640, height=900, format="png", scale=1.0
+                        mode="full_page", width=width, height=height, format="png", scale=1.0
                     ),
                     wait_for_fonts=False,
                     wait_for_images=True,
@@ -133,7 +132,7 @@ class HtmlCardRenderer:
             self._warn("宿主未提供截图契约，卡片模式降级为图片模式")
             return None
         except Exception as exc:  # noqa: BLE001 - 渲染失败只降级不报错
-            self._warn(f"卡片渲染失败，降级为图片模式：{type(exc).__name__}: {exc}")
+            self._warn(f"图片渲染失败，降级为文本：{type(exc).__name__}: {exc}")
             return None
         data = getattr(result, "data", None)
         return bytes(data) if data else None

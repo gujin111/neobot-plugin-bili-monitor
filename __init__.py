@@ -33,7 +33,13 @@ from .bili_model import (
     target_label,
 )
 from .bili_notify import HostSender, HtmlCardRenderer, conversation_for, target_from_context
-from .bili_render import DEFAULT_TEMPLATES, describe_template_fields, render_text
+from .bili_render import (
+    DEFAULT_TEMPLATES,
+    describe_template_fields,
+    help_html,
+    help_text,
+    render_text,
+)
 from .bili_store import (
     CATEGORY_LABELS,
     DEFAULT_CATEGORIES,
@@ -43,7 +49,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -238,37 +244,28 @@ async def _resolve_sub(runtime: _Runtime, token: str) -> tuple[Subscription | No
 
 # ---------------------------------------------------------------- 帮助
 def _help_text() -> str:
-    return (
-        "B 站监控助手（动态 / 开播 / 粉丝里程碑）\n"
-        "\n"
-        "【所有人】/b站监控\n"
-        "  list            查看订阅列表\n"
-        "  info <uid>      查看某个 UP 主的监控配置\n"
-        "  status          查看轮询与推送状态\n"
-        "\n"
-        "【管理员】/b站管理\n"
-        "  add <uid|链接> [直播间号]   添加监控（默认推送到当前会话）\n"
-        "  del <uid>                   取消监控\n"
-        "  on|off <uid>                启用 / 暂停\n"
-        "  cat <uid> <类别,...>        设置提醒类别（动态,转发,视频,专栏,音频,开播,下播,粉丝 / all / none）\n"
-        "  mode <uid> <auto|text|image|card>  发送模式\n"
-        "  at <uid> <on|off>           开播时 @全体成员\n"
-        "  atlist <uid> <qq,qq|clear>  提醒时 @指定成员\n"
-        "  tpl <uid> <类别> <模板|clear>  自定义文案，占位符见 /b站管理 tpl <uid> <类别> ?\n"
-        "  targets [uid]               查看推送目标（含当前会话的群号）\n"
-        "  push <uid> <群号>           追加群推送目标\n"
-        "  push <uid> 私聊 <QQ号>      追加私聊推送目标\n"
-        "  bind <uid>                  把当前会话加为推送目标（等于 pushhere）\n"
-        "  unpush <uid> <群号|私聊 QQ>  移除推送目标\n"
-        "  test <uid>                  发一条测试提醒\n"
-        "  check <uid>                 立即检查一次\n"
-        "  sync <uid>                  刷新昵称/头像/直播间号\n"
-        "\n"
-        "【超级管理员】/b站登录\n"
-        "  qr                          扫码登录 B 站账号（降低风控）\n"
-        "  status                      查看登录状态\n"
-        "  logout                      清除已保存的登录凭证"
+    """纯文本命令表（发图失败时的回退）。"""
+    return help_text()
+
+
+async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
+    """命令速查：优先渲染成图片发到当前会话，渲染不可用时回退文本。"""
+    image = await runtime.cards.render_html(
+        help_html(version=VERSION), width=760, height=1200
     )
+    if image:
+        kind, ident = target_from_context(command_ctx)
+        if ident:
+            try:
+                await runtime.ctx.send_image(
+                    conversation_for(runtime.ctx, kind, ident),
+                    data=image,
+                    filename="bili-help.png",
+                )
+                return None  # 已经把图发出去了，宿主不用再发文本
+            except Exception as exc:  # noqa: BLE001 - 发图失败退回文本
+                _log("warning", f"命令速查图片发送失败，改发文本：{exc}")
+    return help_text()
 
 
 # ---------------------------------------------------------------- 命令注册
@@ -279,7 +276,7 @@ def register_commands(ctx: Any) -> None:
         _log("warning", "宿主命令表不可用，跳过命令注册")
         return
 
-    async def _monitor(command_ctx: Any) -> str:
+    async def _monitor(command_ctx: Any) -> str | None:
         runtime = _RUNTIME
         if runtime is None:
             return "插件尚未加载完成，请稍后再试。"
@@ -287,8 +284,8 @@ def register_commands(ctx: Any) -> None:
         action = (args[0].lower() if args else "list")
         if action in {"list", "列表", "ls", ""}:
             return await _list_text(runtime)
-        if action in {"help", "帮助", "?"}:
-            return _help_text()
+        if action in {"help", "帮助", "菜单", "?", "？"}:
+            return await _send_help(runtime, command_ctx)
         if action in {"status", "状态"}:
             return await _status_text(runtime)
         if action in {"info", "详情"}:
@@ -300,13 +297,13 @@ def register_commands(ctx: Any) -> None:
             return await _info_text(runtime, sub)
         return f"未知子命令：{action}\n\n{_help_text()}"
 
-    async def _admin(command_ctx: Any) -> str:
+    async def _admin(command_ctx: Any) -> str | None:
         runtime = _RUNTIME
         if runtime is None:
             return "插件尚未加载完成，请稍后再试。"
         args = _split_args(command_ctx.raw_args)
         if not args:
-            return _help_text()
+            return await _send_help(runtime, command_ctx)
         action = args[0].lower()
         handler = _ADMIN_HANDLERS.get(action)
         if handler is None:
@@ -663,6 +660,11 @@ async def _admin_targets(runtime: _Runtime, command_ctx: Any, args: list[str]) -
     return "\n".join(lines)
 
 
+async def _admin_help(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str | None:
+    """命令速查图（`/b站管理 help`）。"""
+    return await _send_help(runtime, command_ctx)
+
+
 async def _admin_test(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
     sub, error = await _resolve_sub(runtime, args[0] if args else "")
     if sub is None:
@@ -728,6 +730,7 @@ _ADMIN_HANDLERS = {
     "bind": _admin_pushhere, "绑定": _admin_pushhere,
     "unpush": _admin_unpush, "解绑": _admin_unpush,
     "targets": _admin_targets, "目标": _admin_targets, "推送目标": _admin_targets,
+    "help": _admin_help, "帮助": _admin_help, "菜单": _admin_help, "?": _admin_help, "？": _admin_help,
     "test": _admin_test, "测试": _admin_test,
     "check": _admin_check, "检查": _admin_check,
     "sync": _admin_sync, "刷新": _admin_sync,
