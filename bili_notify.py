@@ -8,22 +8,57 @@ from __future__ import annotations
 
 from typing import Any
 
-from .bili_model import MonitorEvent
+from .bili_model import MonitorEvent, normalize_target_id
 from .bili_render import card_html
 
 
 def conversation_for(ctx: Any, kind: str, target_id: str) -> Any:
     """把 ``group`` / ``private`` 目标换成宿主会话对象。
 
-    大多数适配器用纯数字会话号，但协议里并不保证；非数字时原样交给宿主。
+    发送前统一归一化（去掉 ``group:`` 前缀等），确保推到的是真正的群号/QQ 号。
     """
+    ident = normalize_target_id(target_id)
     try:
-        numeric: Any = int(str(target_id))
+        numeric: Any = int(ident)
     except (TypeError, ValueError):
-        numeric = str(target_id)
+        numeric = ident
     if kind == "group":
         return ctx.conversation_from_event({"message_type": "group", "group_id": numeric})
     return ctx.conversation_from_event({"message_type": "private", "user_id": numeric})
+
+
+def target_from_context(command_ctx: Any) -> tuple[str, str]:
+    """从命令上下文推断「这条命令是在哪个群/哪个人发起的」。
+
+    优先读原始消息里的 ``group_id``（最可靠），退回复用命令的 ``conv_id``；
+    返回值统一成 ``("group"|"private", "纯数字ID")``。
+    """
+    kind = "group" if str(getattr(command_ctx, "kind", "")) == "group" else "private"
+    raw_message = getattr(command_ctx, "message", None)
+    data: dict[str, Any] = {}
+    if raw_message is not None:
+        if hasattr(raw_message, "model_dump"):
+            try:
+                data = dict(raw_message.model_dump(mode="python"))
+            except Exception:  # pragma: no cover - 适配器字段千奇百怪
+                data = {}
+        elif isinstance(raw_message, dict):
+            data = dict(raw_message)
+        else:
+            group_id = getattr(raw_message, "group_id", None)
+            if group_id:
+                data["group_id"] = group_id
+    group_id = data.get("group_id") or data.get("group")
+    if group_id:
+        ident = normalize_target_id(group_id)
+        if ident:
+            return "group", ident
+    conv_id = normalize_target_id(getattr(command_ctx, "conv_id", "") or "")
+    if kind == "private":
+        user_id = normalize_target_id(data.get("user_id") or getattr(command_ctx, "user_id", ""))
+        if user_id:
+            return "private", user_id
+    return kind, conv_id
 
 
 class HostSender:

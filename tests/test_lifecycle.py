@@ -226,3 +226,101 @@ async def test_validate_template(pkg):
     assert pkg.validate_template("{name} 发动态") is None
     assert pkg.validate_template("{name") is not None
     assert pkg.validate_template("") is not None
+
+
+# ---------------------------------------------------------------- 推送目标映射
+class _Ctx:
+    def __init__(self, raw_args, *, kind="group", conv_id="123456", user_id=10001, message=None):
+        self.raw_args = raw_args
+        self.kind = kind
+        self.conv_id = conv_id
+        self.user_id = user_id
+        self.args = raw_args.split()
+        if message is not None:
+            self.message = message
+
+
+async def _prepare(loaded_plugin, monkeypatch):
+    pkg, context, registry, _data_dir = loaded_plugin
+    await pkg.plugin._load(context)
+    runtime = pkg._RUNTIME
+
+    from bili_monitor.bili_api import UpProfile
+
+    async def fake_profile(uid):
+        return UpProfile(uid=uid, name="测试UP", face="", follower=100, room_id=555)
+
+    async def fake_bootstrap(sub, *, profile=None):
+        return {"dynamic": 0, "live": "未开播", "follower": 100}
+
+    monkeypatch.setattr(runtime.api, "resolve_profile", fake_profile)
+    monkeypatch.setattr(runtime.engine, "bootstrap", fake_bootstrap)
+    return pkg, registry, runtime
+
+
+async def test_add_binds_current_group_id(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+
+    reply = await registry.commands["b站管理"].handler(_Ctx("add 546195"))
+
+    stored = await runtime.store.get_subscription(546195)
+    assert [(t.kind, t.target_id) for t in stored.targets] == [("group", "123456")]
+    assert "群 123456" in reply
+    await pkg.plugin.on_stop()
+
+
+async def test_add_prefers_message_group_id(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+
+    # 命令上下文给的是 conv_id，原始消息里的 group_id 更权威
+    ctx = _Ctx("add 546195", conv_id="111111", message={"group_id": 999888, "user_id": 7})
+    await registry.commands["b站管理"].handler(ctx)
+
+    stored = await runtime.store.get_subscription(546195)
+    assert [(t.kind, t.target_id) for t in stored.targets] == [("group", "999888")]
+    await pkg.plugin.on_stop()
+
+
+async def test_push_accepts_bare_group_number(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    await registry.commands["b站管理"].handler(_Ctx("add 546195"))
+
+    reply = await registry.commands["b站管理"].handler(_Ctx("push 546195 987654"))
+
+    stored = await runtime.store.get_subscription(546195)
+    assert ("group", "987654") in {(t.kind, t.target_id) for t in stored.targets}
+    assert "群 987654" in reply
+    await pkg.plugin.on_stop()
+
+
+async def test_push_private_spec(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    await registry.commands["b站管理"].handler(_Ctx("add 546195"))
+
+    await registry.commands["b站管理"].handler(_Ctx("push 546195 私聊 10001"))
+
+    stored = await runtime.store.get_subscription(546195)
+    assert ("private", "10001") in {(t.kind, t.target_id) for t in stored.targets}
+    await pkg.plugin.on_stop()
+
+
+async def test_targets_command_shows_current_conversation(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    await registry.commands["b站管理"].handler(_Ctx("add 546195"))
+
+    text = await registry.commands["b站管理"].handler(_Ctx("targets"))
+
+    assert "当前会话：群 123456" in text
+    assert "测试UP" in text
+    await pkg.plugin.on_stop()
+
+
+async def test_unpush_removes_target(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    await registry.commands["b站管理"].handler(_Ctx("add 546195"))
+
+    await registry.commands["b站管理"].handler(_Ctx("unpush 546195 123456"))
+
+    stored = await runtime.store.get_subscription(546195)
+    assert stored.targets == []
+    await pkg.plugin.on_stop()

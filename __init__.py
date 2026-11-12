@@ -24,8 +24,15 @@ from neobot_modloader import Migration, MessageChain, Plugin, Reply
 from .bili_api import BiliApiError, BiliClient, BiliCooldownError, UpProfile
 from .bili_config import BiliMonitorConfig
 from .bili_engine import MonitorEngine
-from .bili_model import DYNAMIC_KINDS, format_count, format_duration
-from .bili_notify import HostSender, HtmlCardRenderer, conversation_for
+from .bili_model import (
+    DYNAMIC_KINDS,
+    format_count,
+    format_duration,
+    normalize_target_id,
+    parse_target_spec,
+    target_label,
+)
+from .bili_notify import HostSender, HtmlCardRenderer, conversation_for, target_from_context
 from .bili_render import DEFAULT_TEMPLATES, describe_template_fields, render_text
 from .bili_store import (
     CATEGORY_LABELS,
@@ -36,7 +43,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -176,14 +183,6 @@ def validate_template(template: str) -> str | None:
     return None
 
 
-def _conv_kind(command_ctx: Any) -> str:
-    return "group" if str(getattr(command_ctx, "kind", "")) == "group" else "private"
-
-
-def _conv_id(command_ctx: Any) -> str:
-    return str(getattr(command_ctx, "conv_id", "") or "")
-
-
 def _sub_title(sub: Subscription) -> str:
     state = "监控中" if sub.enabled else "已暂停"
     kinds = "、".join(CATEGORY_LABELS.get(key, key) for key in sorted(sub.category_set))
@@ -198,12 +197,8 @@ def _sub_title(sub: Subscription) -> str:
 
 def _targets_text(sub: Subscription) -> str:
     if not sub.targets:
-        return "未设置"
-    parts = []
-    for target in sub.targets:
-        label = "群" if target.kind == "group" else "私聊"
-        parts.append(f"{label}{target.target_id}")
-    return "、".join(parts)
+        return "未设置（用 /b站管理 bind 绑定当前会话）"
+    return "、".join(target_label(target.kind, target.target_id) for target in sub.targets)
 
 
 async def _list_text(runtime: _Runtime) -> str:
@@ -260,9 +255,11 @@ def _help_text() -> str:
         "  at <uid> <on|off>           开播时 @全体成员\n"
         "  atlist <uid> <qq,qq|clear>  提醒时 @指定成员\n"
         "  tpl <uid> <类别> <模板|clear>  自定义文案，占位符见 /b站管理 tpl <uid> <类别> ?\n"
-        "  push <uid> <group|private> <id>   追加推送目标\n"
-        "  pushhere <uid>              把当前会话加为推送目标\n"
-        "  unpush <uid> <group|private> <id> 移除推送目标\n"
+        "  targets [uid]               查看推送目标（含当前会话的群号）\n"
+        "  push <uid> <群号>           追加群推送目标\n"
+        "  push <uid> 私聊 <QQ号>      追加私聊推送目标\n"
+        "  bind <uid>                  把当前会话加为推送目标（等于 pushhere）\n"
+        "  unpush <uid> <群号|私聊 QQ>  移除推送目标\n"
         "  test <uid>                  发一条测试提醒\n"
         "  check <uid>                 立即检查一次\n"
         "  sync <uid>                  刷新昵称/头像/直播间号\n"
@@ -345,7 +342,7 @@ def register_commands(ctx: Any) -> None:
     registrar.register(
         "b站管理",
         description="增删 B 站监控订阅、设置提醒类别与推送目标（管理员）",
-        usage="[add|del|on|off|cat|mode|at|atlist|tpl|push|pushhere|unpush|test|check|sync] ...",
+        usage="[add|del|on|off|cat|mode|at|atlist|tpl|targets|bind|push|unpush|test|check|sync] ...",
         permission=ADMIN_PERMISSION,
         aliases=("bili管理",),
         params=(
@@ -354,7 +351,9 @@ def register_commands(ctx: Any) -> None:
             ("cat <uid> <类别>", "设置提醒类别"),
             ("mode <uid> <模式>", "设置发送模式"),
             ("tpl <uid> <类别> <模板>", "自定义文案"),
-            ("pushhere <uid>", "推送到当前会话"),
+            ("targets [uid]", "查看推送目标与当前群号"),
+            ("bind <uid>", "把当前会话加为推送目标"),
+            ("push <uid> <群号>", "追加群推送目标"),
             ("test <uid>", "发送测试提醒"),
         ),
     )(_admin)
@@ -415,14 +414,16 @@ async def _admin_add(runtime: _Runtime, command_ctx: Any, args: list[str]) -> st
         created_by=str(getattr(command_ctx, "user_id", "") or ""),
         at_all=bool(runtime.config.at_all),
     )
-    await runtime.store.add_target(sub.id, _conv_kind(command_ctx), _conv_id(command_ctx))
+    target_kind, target_id = target_from_context(command_ctx)
+    if target_id:
+        await runtime.store.add_target(sub.id, target_kind, target_id)
     baseline = await runtime.engine.bootstrap(sub, profile=profile)
 
     lines = [
         f"已开始监控 {sub.display_name}（UID {uid}）。",
         f"头像：{'已获取' if profile.face else '无'} | 直播间：{room_id or '无'}",
         f"提醒类别：{'、'.join(CATEGORY_LABELS[key] for key in sorted(sub.category_set))}",
-        f"推送目标：{_conv_kind(command_ctx)} {_conv_id(command_ctx)}",
+        f"推送目标：{target_label(target_kind, target_id) if target_id else '未绑定（请用 /b站管理 bind 绑定当前会话）'}",
         f"基线：动态 {baseline.get('dynamic', 0)} 条 / 直播状态 {baseline.get('live', '未知')}"
         f" / 粉丝 {format_count(baseline.get('follower', 0))}",
     ]
@@ -580,48 +581,86 @@ def _preview_event(sub: Subscription, kind: str):
 
 
 async def _admin_push(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
-    if len(args) < 3:
-        return "用法：/b站管理 push <uid> <group|private> <群号或QQ>"
+    if len(args) < 2:
+        return (
+            "用法：/b站管理 push <uid> <群号>\n"
+            "      /b站管理 push <uid> 群 <群号>\n"
+            "      /b站管理 push <uid> 私聊 <QQ号>\n"
+            "（也认 group:123456 / private:123456 写法）"
+        )
     sub, error = await _resolve_sub(runtime, args[0])
     if sub is None:
         return error
-    kind = args[1].lower()
-    if kind in {"群", "qun"}:
-        kind = "group"
-    if kind in {"私聊", "好友"}:
-        kind = "private"
-    if kind not in {"group", "private"}:
-        return "第二个参数只能是 group 或 private。"
-    if not args[2].isdigit():
-        return "目标 ID 必须是数字。"
-    added = await runtime.store.add_target(sub.id, kind, args[2])
+    parsed = parse_target_spec(args[1:])
+    if parsed is None:
+        return "没解析出目标：请填群号（如 123456789），或写成 群 123456789 / 私聊 10001。"
+    kind, ident = parsed
+    if not ident.isdigit():
+        return f"目标 ID 必须是数字，收到的是「{ident}」。"
+    added = await runtime.store.add_target(sub.id, kind, ident)
     if not added:
-        return f"{sub.display_name} 已经推送到 {kind} {args[2]} 了。"
-    return f"{sub.display_name} 新增推送目标：{kind} {args[2]}"
+        return f"{sub.display_name} 已经推送到 {target_label(kind, ident)} 了。"
+    return f"{sub.display_name} 新增推送目标：{target_label(kind, ident)}"
 
 
 async def _admin_pushhere(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
     sub, error = await _resolve_sub(runtime, args[0] if args else "")
     if sub is None:
         return error
-    kind, conv_id = _conv_kind(command_ctx), _conv_id(command_ctx)
-    added = await runtime.store.add_target(sub.id, kind, conv_id)
+    kind, ident = target_from_context(command_ctx)
+    if not ident:
+        return (
+            "没识别出当前会话的 ID。请改用显式写法：\n"
+            f"/b站管理 push {sub.uid} 群 <群号>   或   /b站管理 push {sub.uid} 私聊 <QQ号>"
+        )
+    added = await runtime.store.add_target(sub.id, kind, ident)
     if not added:
-        return f"{sub.display_name} 已经推送到当前会话了。"
-    return f"{sub.display_name} 已加为当前会话（{kind} {conv_id}）的推送。"
+        return f"{sub.display_name} 已经推送到当前会话（{target_label(kind, ident)}）了。"
+    return f"{sub.display_name} 已加为当前会话的推送：{target_label(kind, ident)}"
 
 
 async def _admin_unpush(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
-    if len(args) < 3:
-        return "用法：/b站管理 unpush <uid> <group|private> <群号或QQ>"
+    if len(args) < 2:
+        return "用法：/b站管理 unpush <uid> <群号|私聊 QQ>"
     sub, error = await _resolve_sub(runtime, args[0])
     if sub is None:
         return error
-    kind = "group" if args[1].lower() in {"group", "群", "qun"} else "private"
-    removed = await runtime.store.remove_target(sub.id, kind, args[2])
+    parsed = parse_target_spec(args[1:])
+    if parsed is None:
+        return "没解析出目标：请填群号，或写成 群 123456 / 私聊 10001。"
+    kind, ident = parsed
+    removed = await runtime.store.remove_target(sub.id, kind, ident)
     return (
-        f"已移除推送目标 {kind} {args[2]}。" if removed else f"没有找到推送目标 {kind} {args[2]}。"
+        f"已移除推送目标 {target_label(kind, ident)}。"
+        if removed
+        else f"没有找到推送目标 {target_label(kind, ident)}。用 /b站管理 targets {sub.uid} 查看现有目标。"
     )
+
+
+async def _admin_targets(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
+    """查看/自检推送目标，顺便告诉用户「当前会话」对应哪个群号。"""
+    here_kind, here_id = target_from_context(command_ctx)
+    here = target_label(here_kind, here_id) if here_id else "未识别"
+    rows: list[str] = []
+    subs = await runtime.store.list_subscriptions()
+    if args:
+        sub, error = await _resolve_sub(runtime, args[0])
+        if sub is None:
+            return error
+        subs = [sub]
+    if not subs:
+        return "还没有任何订阅，先用 /b站管理 add <uid> 添加。"
+    for sub in subs:
+        if sub.targets:
+            items = "、".join(target_label(t.kind, t.target_id) for t in sub.targets)
+        else:
+            items = "未绑定"
+        rows.append(f"{sub.display_name}（UID {sub.uid}）→ {items}")
+    lines = [f"当前会话：{here}", *rows]
+    lines.append("")
+    lines.append("把提醒推到当前会话：/b站管理 bind <uid>")
+    lines.append("推到别的群：/b站管理 push <uid> <群号>")
+    return "\n".join(lines)
 
 
 async def _admin_test(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
@@ -629,7 +668,7 @@ async def _admin_test(runtime: _Runtime, command_ctx: Any, args: list[str]) -> s
     if sub is None:
         return error
     if not sub.targets:
-        return f"{sub.display_name} 还没有推送目标，先 /b站管理 pushhere {sub.uid}。"
+        return f"{sub.display_name} 还没有推送目标，先 /b站管理 bind {sub.uid}。"
     sent = 0
     for target in sub.targets:
         if await runtime.engine.send_test(sub, kind=target.kind, target_id=target.target_id):
@@ -686,7 +725,9 @@ _ADMIN_HANDLERS = {
     "tpl": _admin_tpl, "template": _admin_tpl, "模板": _admin_tpl,
     "push": _admin_push, "推送": _admin_push,
     "pushhere": _admin_pushhere, "推送到此": _admin_pushhere,
-    "unpush": _admin_unpush,
+    "bind": _admin_pushhere, "绑定": _admin_pushhere,
+    "unpush": _admin_unpush, "解绑": _admin_unpush,
+    "targets": _admin_targets, "目标": _admin_targets, "推送目标": _admin_targets,
     "test": _admin_test, "测试": _admin_test,
     "check": _admin_check, "检查": _admin_check,
     "sync": _admin_sync, "刷新": _admin_sync,
@@ -763,7 +804,7 @@ async def _start_qr_login(runtime: _Runtime, command_ctx: Any) -> str:
     except BiliApiError as exc:
         return f"生成二维码失败：{exc}"
 
-    kind, conv_id = _conv_kind(command_ctx), _conv_id(command_ctx)
+    kind, conv_id = target_from_context(command_ctx)
     chain = MessageChain().text("请用 B 站手机客户端扫码登录（3 分钟内有效）。")
     if image_url:
         chain.text("\n").image(url=image_url)
@@ -848,6 +889,12 @@ async def _on_load(ctx: Any) -> None:
 
     await api.start()
     register_commands(ctx)
+    try:
+        fixed = await store.normalize_targets()
+        if fixed:
+            ctx.logger.info(f"推送目标 ID 已归一化：修正 {fixed} 条（如 group:123 → 123）")
+    except Exception as exc:  # noqa: BLE001 - 修正失败不影响加载
+        ctx.logger.warning(f"推送目标归一化失败：{exc}")
     sub_count = await store.count_subscriptions()
     ctx.logger.info(f"B 站监控插件已加载：{sub_count} 个订阅，登录态={'有' if api.has_login else '无'}")
     if sub_count and not cards.available:

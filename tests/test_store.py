@@ -178,3 +178,23 @@ async def test_invalid_template_json_falls_back(store):
     assert sub.template_map == {}
     sub.categories = "not-json"
     assert sub.category_set == set()
+
+
+async def test_normalize_targets_rewrites_legacy_ids(store):
+    sub = await store.create_subscription(uid=12, uname="a", face="", room_id=None, created_by="", at_all=False)
+    await store.add_target(sub.id, "group", "group:123456")
+    await store.add_target(sub.id, "group", "123456")          # 归一后与上一条重复
+    await store.add_target(sub.id, "private", "10001")
+
+    changed = await store.normalize_targets()
+
+    assert changed >= 1
+    refreshed = await store.get_subscription(12)
+    ids = sorted((t.kind, t.target_id) for t in refreshed.targets)
+    assert ids == [("group", "123456"), ("private", "10001")]
+
+
+async def test_normalize_targets_is_noop_when_clean(store):
+    sub = await store.create_subscription(uid=13, uname="a", face="", room_id=None, created_by="", at_all=False)
+    await store.add_target(sub.id, "group", "123456")
+    assert await store.normalize_targets() == 0

@@ -174,3 +174,31 @@ def test_live_events(model):
     assert off.extra["duration"] == 3600
     assert off.extra["duration_text"] == "1 小时 0 分"
     assert off.extra["peak_online"] == 5000
+
+
+# ---------------------------------------------------------------- 推送目标映射
+def test_normalize_target_id(model):
+    assert model.normalize_target_id("123456") == "123456"
+    assert model.normalize_target_id(123456) == "123456"
+    assert model.normalize_target_id("group:123456") == "123456"
+    assert model.normalize_target_id("群：123456") == "123456"
+    assert model.normalize_target_id("group_123456") == "123456"
+    assert model.normalize_target_id("群 123456") == "123456"
+    assert model.normalize_target_id("private:10001") == "10001"
+    assert model.normalize_target_id("") == ""
+    assert model.normalize_target_id(None) == ""
+
+
+def test_parse_target_spec(model):
+    assert model.parse_target_spec(["123456"]) == ("group", "123456")
+    assert model.parse_target_spec(["群", "123456"]) == ("group", "123456")
+    assert model.parse_target_spec(["私聊", "10001"]) == ("private", "10001")
+    assert model.parse_target_spec(["group:123456"]) == ("group", "123456")
+    assert model.parse_target_spec(["private:10001"]) == ("private", "10001")
+    assert model.parse_target_spec([]) is None
+    assert model.parse_target_spec(["abc"]) is None
+
+
+def test_target_label(model):
+    assert model.target_label("group", "123456") == "群 123456"
+    assert model.target_label("private", "10001") == "私聊 10001"

@@ -44,6 +44,68 @@ class MonitorEvent:
         return f"{self.uid}:{self.event_key}"
 
 
+# ---------------------------------------------------------------- 推送目标
+#: 目标写法 → 会话类型。用户可能写 `群`、`group`、`group:123`、直接写群号
+TARGET_KIND_ALIASES: dict[str, str] = {
+    "group": "group", "g": "group", "群": "group", "qun": "group", "群聊": "group",
+    "private": "private", "p": "private", "私聊": "private", "好友": "private", "个人": "private",
+}
+
+
+def normalize_target_id(raw: Any) -> str:
+    """把各种写法归一成「纯数字 ID」。
+
+    ``group:123456`` / ``群123456`` / ``123456`` / ``"123456"`` 都会变成 ``123456``；
+    拿不到数字时原样返回（例如某些适配器用字符串会话号）。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    for sep in (":", "：", "_", "-", "#"):
+        if sep in text:
+            head, _, tail = text.partition(sep)
+            if TARGET_KIND_ALIASES.get(head.strip().lower()) or TARGET_KIND_ALIASES.get(head.strip()):
+                text = tail.strip()
+                break
+    # 去掉「群」这类前缀字
+    for prefix in ("群", "群聊", "私聊", "好友"):
+        if text.startswith(prefix):
+            text = text[len(prefix) :].strip()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or text
+
+
+def parse_target_spec(tokens: list[str] | tuple[str, ...]) -> tuple[str, str] | None:
+    """解析推送目标：``群 123456`` / ``group:123456`` / ``123456``。
+
+    - 显式写法（``群`` / ``group`` / ``私聊`` / ``private``）按写的那类；
+    - 只有一个数字时按 **群号** 处理（机器人最常见的推送场景），
+      要推私聊请写 ``私聊 <QQ>``。
+    """
+    parts = [str(token).strip() for token in tokens if str(token).strip()]
+    if not parts:
+        return None
+    first = parts[0]
+    head = first.split(":")[0].split("：")[0].strip().lower()
+    kind = TARGET_KIND_ALIASES.get(head) or TARGET_KIND_ALIASES.get(first.split(":")[0].strip())
+    if kind is not None and len(parts) >= 2:
+        ident = normalize_target_id(parts[1])
+        return (kind, ident) if ident else None
+    if kind is not None and ":" in first:
+        ident = normalize_target_id(first)
+        return (kind, ident) if ident else None
+    ident = normalize_target_id(first)
+    if ident and ident.isdigit():
+        # 单个数字：按群号
+        return ("group", ident)
+    return None
+
+
+def target_label(kind: str, target_id: str) -> str:
+    """界面展示用：``群 123456`` / ``私聊 10001``。"""
+    return f"{'群' if kind == 'group' else '私聊'} {target_id}"
+
+
 # ---------------------------------------------------------------- 动态解析
 _COUNT_RE = re.compile(r"([\d.]+)\s*(亿|万)?")
 

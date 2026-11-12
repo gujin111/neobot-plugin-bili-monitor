@@ -270,6 +270,36 @@ class BiliStore:
             for kind, target_id in targets:
                 session.add(Target(sub_id=sub_id, kind=kind, target_id=str(target_id)))
 
+    async def normalize_targets(self) -> int:
+        """把历史遗留的目标 ID 归一化（``group:123`` → ``123``），并合并重复项。
+
+        旧版本可能把 ``group:123`` 之类带前缀的会话号存进库，导致推送时找不到群；
+        插件加载时跑一次即可修正。返回被修改/删除的条数。
+        """
+        from .bili_model import normalize_target_id
+
+        changed = 0
+        async with self._db.transaction() as session:
+            rows = list(await session.scalars(select(Target).order_by(Target.id)))
+            seen: set[tuple[int, str, str]] = set()
+            updates: list[tuple[Target, str]] = []
+            for row in rows:
+                ident = normalize_target_id(row.target_id)
+                key = (row.sub_id, row.kind, ident)
+                if key in seen:
+                    await session.delete(row)
+                    changed += 1
+                    continue
+                seen.add(key)
+                if ident != row.target_id:
+                    updates.append((row, ident))
+            # 先落 DELETE，再把旧 ID 改掉，避免 UPDATE 撞上还没删掉的重复行唯一约束
+            await session.flush()
+            for row, ident in updates:
+                row.target_id = ident
+                changed += 1
+        return changed
+
     # ---------------------------------------------------------------- 游标
     async def get_cursor(self, sub_id: int, kind: str) -> Cursor | None:
         async with self._db.session() as session:

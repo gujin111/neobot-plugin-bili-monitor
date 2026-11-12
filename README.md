@@ -69,9 +69,10 @@ pydantic` 由面板自动安装（本体已自带）。
 | `at <uid> <on\|off>` | 开播提醒 @全体成员（需要机器人有群管理员权限） |
 | `atlist <uid> <qq,qq\|clear>` | 提醒时 @指定成员 |
 | `tpl <uid> <类别> <模板\|clear>` | 自定义文案；`tpl <uid> <类别> ?` 查占位符 |
-| `push <uid> <group\|private> <id>` | 追加推送目标 |
-| `pushhere <uid>` | 把当前会话加为推送目标 |
-| `unpush <uid> <group\|private> <id>` | 移除推送目标 |
+| `targets [uid]` | 查看推送目标，含当前会话的群号 |
+| `bind <uid>` | 把当前会话加为推送目标（旧名 `pushhere`） |
+| `push <uid> <群号>` / `push <uid> 私聊 <QQ号>` | 追加推送目标（也认 `group:123`） |
+| `unpush <uid> <群号\|私聊 QQ>` | 移除推送目标 |
 | `test <uid>` | 发一条测试提醒 |
 | `check <uid>` | 立即检查一次（不等轮询） |
 | `sync <uid>` | 刷新昵称 / 头像 / 直播间号 |
@@ -141,7 +142,7 @@ pydantic` 由面板自动安装（本体已自带）。
 | --- | --- |
 | 桌面窗口配置 | 网页面板表单 + `[config]` 注释说明 |
 | `监控任务.ini` / `订阅任务\UID.ini` / `开播信息.ini` | SQLite（`plugins_data/bili_monitor/databases/bili_monitor.db`） |
-| 推送 QQ / 推送群号 | 每个订阅多个推送目标（群/私聊），`push` / `pushhere` |
+| 推送 QQ / 推送群号 | 每个订阅多个推送目标（群/私聊），`bind` / `push` |
 | 开播·下播·新动态·转发·新视频·新专栏·新音频·千粉提醒 | 全部支持，按类别独立开关 |
 | 自定义提醒文案 | `tpl` 命令，占位符与旧版字段对应 |
 | 图片模式（远程 PHP 截图服务） | `image` 文本+原图；`card` 用本体截图端口渲染本地卡片 |
