@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.0.4 — 2026-11-13
+
+### 兼容
+
+- **适配 NeoBot 2.1.0a9**：官方通道新增 `proactive`（主动消息）参数，监控推送会自动带上；
+  a7/a8 没有该参数时自动退回原调用（`inspect.signature` 探测，不写死版本号）
+- **直接读适配器的通道标识**：用 a9 的 `SwitchableAdapter.active_channels` /
+  `current_channel()` 判断当前是 `official` 还是 `onebot`，不再靠类名字符串猜
+- a9 与 a8 上全部测试、`sdk check` / `sdk export` 均通过
+
+### 新增
+
+- 链接默认发**文字链接**：`▶ [点击进入直播间](https://…)`，只显示文字、不露长网址；
+  `link_style=url` 退回「文字 + 裸网址」
+- 官方通道命令速查改为 **Markdown 卡片**（`help_format=auto`），不碰媒体上传
+- 配置：`media_mode`（auto/always/never）、`help_format`（auto/markdown/image/text）、
+  `link_style`（auto/markdown/url）、`max_images`
+
+### 修复
+
+- 官方通道 `MediaUploadError: 富媒体文件下载失败`：
+  - 官方通道默认不发图（帮助卡片 → Markdown，card / image → 文字）
+  - 图片熔断：失败一次后本进程不再尝试，只发文字
+  - image 模式改为「插件自己下载 → 按字节上传」，不再让通道去拉 B 站 CDN
+  - 单图失败只跳过，文本提醒照常送达
+
+### 精简
+
+- 删除无用的按钮实现（`send_button` 配置、`keyboard_payload`、`HostSender.send_button`）：
+  NeoBot 官方适配器只组装 `content` / `markdown` / `media`，官方文档把
+  「内嵌键盘/按钮/ARK」列为非目标，`keyboard` 段发不出去
+- 三套重复的通道判断（`supports_button` / `supports_images` / `is_official_channel`）
+  合并成一个 `channel_kind()`，并直接用本体自己的通道标识
+- 去掉冗余配置 `send_images`（`media_mode` 已覆盖）
+
 ## 1.0.3 — 2026-11-12
 
 命令速查改成**图片**发到 QQ。

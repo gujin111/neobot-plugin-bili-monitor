@@ -52,10 +52,33 @@
         "title": "粉丝数轮询间隔（秒）",
         "type": "integer"
       },
+      "help_format": {
+        "default": "auto",
+        "description": "auto=官方机器人通道发 Markdown 卡片、其它通道发图片；markdown=始终发 Markdown 卡片（不碰媒体上传）；image=始终渲染成图片；text=始终发纯文本。",
+        "enum": [
+          "auto",
+          "markdown",
+          "image",
+          "text"
+        ],
+        "title": "命令速查的呈现方式",
+        "type": "string"
+      },
       "include_link": {
         "default": true,
         "title": "附带原文链接",
         "type": "boolean"
+      },
+      "link_style": {
+        "default": "auto",
+        "description": "auto=官方通道用 Markdown 链接 `[点击进入直播间](链接)`，其它通道用裸链接；url=始终裸链接；markdown=始终 Markdown 链接。",
+        "enum": [
+          "auto",
+          "url",
+          "markdown"
+        ],
+        "title": "链接写法",
+        "type": "string"
       },
       "live_interval_seconds": {
         "default": 90,
@@ -73,6 +96,14 @@
         "title": "单轮最多推送条数",
         "type": "integer"
       },
+      "max_images": {
+        "default": 2,
+        "description": "0 表示不发图；官方通道建议 1~2 张，多了容易触发上传限流。",
+        "maximum": 9,
+        "minimum": 0,
+        "title": "每条约几张图",
+        "type": "integer"
+      },
       "max_subscriptions": {
         "default": 30,
         "description": "同时监控的 UP 主数量上限。",
@@ -88,6 +119,17 @@
         "minimum": 40,
         "title": "正文截断长度",
         "type": "integer"
+      },
+      "media_mode": {
+        "default": "auto",
+        "description": "auto=官方机器人通道自动不发图（避免「富媒体文件下载失败」），OneBot 正常发；always=强制发图（仅当本体的文件服务公网可达时官方通道才能成功）；never=一律不发图，只发文字。",
+        "enum": [
+          "auto",
+          "always",
+          "never"
+        ],
+        "title": "图片通道",
+        "type": "string"
       },
       "proxy": {
         "default": "",
@@ -208,7 +250,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.3"
+    "version": "1.0.4"
   },
   "resources": [],
   "schema_version": 1

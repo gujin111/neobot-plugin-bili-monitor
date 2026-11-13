@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from .bili_model import MonitorEvent, normalize_target_id
@@ -62,21 +63,110 @@ def target_from_context(command_ctx: Any) -> tuple[str, str]:
 
 
 class HostSender:
-    """推送发送器：一条消息一个会话。"""
+    """推送发送器：一条消息一个会话。
+
+    NeoBot 2.1.0a9 起 ``ctx.send`` / ``ctx.send_image`` 增加了 ``proactive`` 参数：
+    官方通道在用户没有被动回复窗口时只能按**主动消息**发送，监控推送正是这种场景。
+    这里探测宿主是否支持该参数，旧版本（a7/a8）保持原调用方式。
+    """
+
+    #: 宿主 send/send_image 是否接受 proactive（引擎据此决定是否传参）
+    supports_proactive_kw = True
 
     def __init__(self, ctx: Any, logger: Any = None) -> None:
         self._ctx = ctx
         self._logger = logger
+        #: 当前通道：official / onebot / mixed（决定发不发图、帮助卡片形态）
+        self.channel = channel_kind(ctx)
+        #: 图片通道失败过一次就置位，本进程不再尝试发图
+        self.media_blocked = False
+        #: 宿主是否接受 proactive（a9 起官方通道主动消息需要它）
+        self.supports_proactive_kw = _accepts_kwarg(getattr(ctx, "send", None), "proactive")
+        self._image_proactive = _accepts_kwarg(getattr(ctx, "send_image", None), "proactive")
 
-    async def send_chain(self, kind: str, target_id: str, chain: Any) -> bool:
+    async def send_chain(self, kind: str, target_id: str, chain: Any, *, proactive: bool = True) -> bool:
         conversation = conversation_for(self._ctx, kind, target_id)
-        await self._ctx.send(conversation, chain)
+        if proactive and self.supports_proactive_kw:
+            await self._ctx.send(conversation, chain, proactive=True)
+        else:
+            await self._ctx.send(conversation, chain)
         return True
 
-    async def send_image(self, kind: str, target_id: str, data: bytes, filename: str) -> bool:
+    async def send_image(
+        self, kind: str, target_id: str, data: bytes, filename: str, *, proactive: bool = True
+    ) -> bool:
         conversation = conversation_for(self._ctx, kind, target_id)
-        await self._ctx.send_image(conversation, data=data, filename=filename)
+        if proactive and self._image_proactive:
+            await self._ctx.send_image(conversation, data=data, filename=filename, proactive=True)
+        else:
+            await self._ctx.send_image(conversation, data=data, filename=filename)
         return True
+
+
+def _accepts_kwarg(func: Any, name: str) -> bool:
+    """宿主方法是否接受某个关键字参数（兼容 a7/a8 没有 proactive 的版本）。"""
+    if func is None:
+        return False
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):  # pragma: no cover - 内建/装饰器对象兜底
+        return False
+
+
+# ---------------------------------------------------------------- 通道能力
+OFFICIAL = "official"
+ONEBOT = "onebot"
+
+
+def channel_kind(ctx: Any) -> str:
+    """问本体现在走的是哪条通道：``official`` / ``onebot`` / ``mixed`` / ``""``。
+
+    直接读适配器自己的标识（2.1.0a9 的 ``SwitchableAdapter.active_channels`` 与
+    ``current_channel()``），只有老版本拿不到时才退回类名判断——不再靠字符串瞎猜。
+    """
+    adapter = getattr(ctx, "adapter", None)
+    if adapter is None:
+        return ""
+    try:
+        from neobot_adapter.switchable import current_channel  # type: ignore
+    except Exception:  # pragma: no cover - 老版本没有这个模块
+        current_channel = None
+    try:
+        active = tuple(getattr(adapter, "active_channels", ()) or ())
+    except Exception:  # pragma: no cover
+        active = ()
+    if active:
+        # 事件处理期间能拿到「当前通道」；后台任务里拿不到就按在跑的通道判断
+        current = current_channel() if current_channel is not None else None
+        if current in active:
+            return str(current)
+        if set(active) == {OFFICIAL}:
+            return OFFICIAL
+        if set(active) == {ONEBOT}:
+            return ONEBOT
+        return "mixed"
+    name = type(adapter).__name__.lower()
+    if "official" in name:
+        return OFFICIAL
+    if "onebot" in name or "local" in name:
+        return ONEBOT
+    return ""
+
+
+def media_allowed(config: Any, sender: Any) -> bool:
+    """本次能不能发图片：熔断标记 + `media_mode` + 通道。
+
+    官方通道的富媒体上传是让 QQ 按 URL 去拉文件，而本体的图片在本地文件服务里，
+    QQ 拉不到就会报「富媒体文件下载失败」，所以官方通道默认**不发图**。
+    """
+    if getattr(sender, "media_blocked", False):
+        return False
+    mode = str(getattr(config, "media_mode", "auto") or "auto").lower()
+    if mode == "never":
+        return False
+    if mode == "always":
+        return True
+    return getattr(sender, "channel", "") != OFFICIAL
 
 
 class HtmlCardRenderer:

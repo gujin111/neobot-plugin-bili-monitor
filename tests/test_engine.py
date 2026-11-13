@@ -71,6 +71,15 @@ class FakeSender:
         return True
 
 
+class FakeCards:
+    """假的卡片渲染器：总是渲染成功。"""
+
+    available = True
+
+    async def render(self, event, custom):
+        return b"\x89PNG-fake"
+
+
 class FakeApi:
     def __init__(self):
         self.dynamics: dict[int, list] = {}
@@ -101,6 +110,13 @@ class FakeApi:
         self.relation_calls = getattr(self, "relation_calls", 0) + 1
         return {"follower": self.followers.get(mid, 0)}
 
+    async def download_image(self, url, *, max_bytes=None):
+        self.downloaded = getattr(self, "downloaded", [])
+        self.downloaded.append(url)
+        if getattr(self, "fail_download", False):
+            return None
+        return b"\xff\xd8\xff\xe0jpeg-bytes"
+
 
 def make_config(**overrides):
     base = dict(
@@ -112,6 +128,9 @@ def make_config(**overrides):
         at_all_on_live_only=True,
         send_mode="auto",
         include_link=True,
+        media_mode="auto",
+        link_style="url",
+        max_images=2,
         push_gap_seconds=0.0,
     )
     base.update(overrides)
@@ -372,7 +391,7 @@ async def test_text_mode_has_no_image_segments(engine_mod, store_mod):
     assert [seg for seg in chain.segments if seg.type == "image"] == []
 
 
-async def test_image_mode_adds_images(engine_mod, store_mod):
+async def test_image_mode_downloads_then_uploads_images(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
     engine = build_engine(engine_mod, store, api, sender, make_config())
     sub = make_sub(store_mod)
@@ -380,8 +399,165 @@ async def test_image_mode_adds_images(engine_mod, store_mod):
     event = _event_from(engine_mod, api)
     await engine._dispatch(sub, event)
 
+    # 文本链里不再塞 URL，图片由插件自己下载后按字节发
     chain = sender.sent[0][2]
-    assert len([seg for seg in chain.segments if seg.type == "image"]) == 1
+    assert [seg for seg in chain.segments if seg.type == "image"] == []
+    assert len(sender.images) == 1
+    assert sender.images[0][2].startswith(b"\xff\xd8")
+    assert api.downloaded == ["https://i0.hdslb.com/p.jpg"]
+
+
+async def test_image_download_failure_keeps_text(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    api.fail_download = True
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.sent) == 1, "文本照发"
+    assert sender.images == [], "下载失败就跳过图片，不报错"
+
+
+async def test_image_upload_failure_keeps_text(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("官方富媒体上传失败")
+
+    sender.send_image = boom  # type: ignore[assignment]
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.sent) == 1, "图片上传失败也要保住文本提醒"
+
+
+async def test_media_mode_never_disables_images(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    engine = build_engine(engine_mod, store, api, sender, make_config(media_mode="never"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.sent) == 1
+    assert sender.images == []
+
+
+async def test_media_mode_always_forces_images_on_official(engine_mod, store_mod):
+    """文件服务公网可达的用户可以强制发图。"""
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config(media_mode="always"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.images) == 1
+
+
+async def test_link_defaults_to_text_link(engine_mod, store_mod):
+    """默认发文字链接：只显示「▶ 点击进入直播间」，网址藏在链接里。"""
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.is_official = True
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "text"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    text = sender.sent[0][2].plain_text
+    assert "▶ [点击进入直播间](https://live.bilibili.com/555)" in text
+    # 不把裸网址单独糊在消息里
+    assert "点击进入直播间：https" not in text
+
+
+async def test_link_style_url_is_opt_in(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.is_official = True
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="url"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "text"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    text = sender.sent[0][2].plain_text
+    assert "点击进入直播间：https://live.bilibili.com/555" in text
+    assert "[点击进入直播间]" not in text
+
+
+async def test_onebot_channel_also_uses_text_link(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.is_official = False
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "text"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    text = sender.sent[0][2].plain_text
+    assert "▶ [点击进入直播间](https://live.bilibili.com/555)" in text
+
+
+async def test_official_channel_never_sends_images(engine_mod, store_mod):
+    """官方通道不支持本地文件上传：image 模式也只会发文字。"""
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.sent) == 1
+    assert sender.images == []
+    assert getattr(api, "downloaded", []) == [], "连下载都不该发起"
+
+
+async def test_official_channel_skips_card_mode(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config(), cards=FakeCards())
+    sub = make_sub(store_mod)
+    sub.send_mode = "card"
+    rendered = []
+
+    async def fake_render(event, custom):
+        rendered.append(1)
+        return b"png"
+
+    engine._cards.render = fake_render  # type: ignore[union-attr]
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    assert rendered == [], "官方通道连渲染都不用做"
+    assert len(sender.sent) == 1
+    assert sender.images == []
+
+
+async def test_media_failure_blocks_following_images(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    sub.send_mode = "image"
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("MediaUploadError: 上传官方富媒体失败")
+
+    sender.send_image = boom  # type: ignore[assignment]
+
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+    store.claimed.clear()
+    await engine._dispatch(sub, _event_from(engine_mod, api))
+
+    assert len(sender.sent) == 2, "两条提醒的文本都要发出去"
+    assert engine._media_blocked is True, "失败一次后熔断，不再尝试发图"
 
 
 def _event_from(engine_mod, api):
@@ -549,3 +725,36 @@ async def test_poll_now_respects_cooldown(engine_mod, store_mod):
     await engine.poll_now(make_sub(store_mod))
 
     assert api.feed_calls == 0
+
+
+# ---------------------------------------------------------------- 卡片 + 链接
+async def test_card_mode_sends_clickable_link_text(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    engine = build_engine(engine_mod, store, api, sender, make_config(), cards=FakeCards())
+    sub = make_sub(store_mod)
+    sub.send_mode = "card"
+
+    await engine._send(sub, _live_event(engine_mod), "group", "1", {})
+
+    assert len(sender.images) == 1, "先发卡片图"
+    assert len(sender.sent) == 1, "再补一条可点链接文本"
+    text = sender.sent[0][2].plain_text
+    assert "▶ 点击进入直播间" in text
+    assert "https://live.bilibili.com/555" in text
+
+
+async def test_card_mode_skips_link_text_when_disabled(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    engine = build_engine(
+        engine_mod, store, api, sender, make_config(include_link=False), cards=FakeCards()
+    )
+    sub = make_sub(store_mod)
+    sub.send_mode = "card"
+
+    await engine._send(sub, _live_event(engine_mod), "group", "1", {})
+
+    assert len(sender.images) == 1
+    assert sender.sent == []
+
+
+# ---------------------------------------------------------------- 官方通道按钮

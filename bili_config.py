@@ -11,6 +11,9 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 SendMode = Literal["auto", "text", "image", "card"]
+MediaMode = Literal["auto", "always", "never"]
+HelpFormat = Literal["auto", "markdown", "image", "text"]
+LinkStyle = Literal["auto", "url", "markdown"]
 
 
 class BiliMonitorConfig(BaseModel):
@@ -85,6 +88,36 @@ class BiliMonitorConfig(BaseModel):
         description="开启后，@全体只作用于开播提醒，动态/下播提醒不带 @。",
     )
     include_link: bool = Field(default=True, title="附带原文链接")
+    media_mode: MediaMode = Field(
+        default="auto",
+        title="图片通道",
+        description=(
+            "auto=官方机器人通道自动不发图（避免「富媒体文件下载失败」），OneBot 正常发；"
+            "always=强制发图（仅当本体的文件服务公网可达时官方通道才能成功）；"
+            "never=一律不发图，只发文字。"
+        ),
+    )
+    max_images: int = Field(
+        default=2, title="每条约几张图", ge=0, le=9,
+        description="0 表示不发图；官方通道建议 1~2 张，多了容易触发上传限流。",
+    )
+    help_format: HelpFormat = Field(
+        default="auto",
+        title="命令速查的呈现方式",
+        description=(
+            "auto=官方机器人通道发 Markdown 卡片、其它通道发图片；"
+            "markdown=始终发 Markdown 卡片（不碰媒体上传）；"
+            "image=始终渲染成图片；text=始终发纯文本。"
+        ),
+    )
+    link_style: LinkStyle = Field(
+        default="auto",
+        title="链接写法",
+        description=(
+            "auto=官方通道用 Markdown 链接 `[点击进入直播间](链接)`，其它通道用裸链接；"
+            "url=始终裸链接；markdown=始终 Markdown 链接。"
+        ),
+    )
     max_text_chars: int = Field(
         default=180, title="正文截断长度", description="动态正文超过这个长度会截断并加省略号。",
         ge=40, le=1000,

@@ -13,30 +13,47 @@ from neobot_modloader import MessageChain
 
 from .bili_model import MonitorEvent, format_count, html_escape
 
+#: 链接按钮文案：卡片里画成按钮，文本里作为「按钮名：链接」一行
+LINK_LABELS: dict[str, str] = {
+    "live_on": "点击进入直播间",
+    "live_off": "进入直播间",
+    "dynamic_video": "观看视频",
+    "dynamic_article": "阅读专栏",
+    "dynamic_audio": "收听音频",
+    "dynamic_new": "查看动态",
+    "dynamic_repost": "查看原动态",
+    "follower": "进入空间",
+    "test": "查看空间",
+}
+
 #: 默认模板，占位符与旧版「bili 监控助手」的提醒字段保持一致
 DEFAULT_TEMPLATES: dict[str, str] = {
-    "dynamic_new": "【动态提醒】\n{name} 发布了新动态\n\n{text}\n\n{url}",
-    "dynamic_repost": "【转发动态】\n{name} 转发了动态\n\n{text}\n\n{url}",
-    "dynamic_video": "【新视频】\n{name} 投稿了新视频\n{title}\n时长 {duration} · 播放 {play_text}\n{url}",
-    "dynamic_article": "【新专栏】\n{name} 发布了新专栏\n{title}\n\n{text}\n\n{url}",
-    "dynamic_audio": "【新音频】\n{name} 发布了新音频\n{title}\n{url}",
-    "live_on": "【开播提醒】\n{name} 开播啦~\n直播标题：{title}\n分区：{area}\n{url}",
-    "live_off": "【下播提醒】\n{name} 下播啦！\n直播标题：{title}\n时长：{duration_text}\n最高人气：{peak_text}\n{url}",
+    "dynamic_new": "【动态提醒】\n{name} 发布了新动态\n\n{text}\n\n{link}",
+    "dynamic_repost": "【转发动态】\n{name} 转发了动态\n\n{text}\n\n{link}",
+    "dynamic_video": "【新视频】\n{name} 投稿了新视频\n{title}\n时长 {duration} · 播放 {play_text}\n{link}",
+    "dynamic_article": "【新专栏】\n{name} 发布了新专栏\n{title}\n\n{text}\n\n{link}",
+    "dynamic_audio": "【新音频】\n{name} 发布了新音频\n{title}\n{link}",
+    "live_on": "【开播提醒】\n{name} 开播啦~\n直播标题：{title}\n分区：{area}\n▶ {link}",
+    "live_off": "【下播提醒】\n{name} 下播啦！\n直播标题：{title}\n时长：{duration_text}\n最高人气：{peak_text}\n▶ {link}",
     "follower": "【粉丝数提醒】\n恭喜 {name} 粉丝数突破 {milestone_text}！当前 {follower_text} 粉丝",
-    "test": "【测试提醒】\n{name} 的提醒链路正常。\n{url}",
+    "test": "【测试提醒】\n{name} 的提醒链路正常。\n▶ {link}",
 }
 
 TEMPLATE_FIELDS: dict[str, tuple[str, ...]] = {
-    "dynamic_new": ("name", "uid", "text", "title", "url", "time"),
-    "dynamic_repost": ("name", "uid", "text", "title", "url", "time", "orig_author", "orig_text"),
-    "dynamic_video": ("name", "uid", "title", "text", "url", "duration", "play_text", "bvid", "time"),
-    "dynamic_article": ("name", "uid", "title", "text", "url", "time"),
-    "dynamic_audio": ("name", "uid", "title", "text", "url", "time"),
-    "live_on": ("name", "uid", "title", "url", "area", "online_text", "room_id", "time"),
-    "live_off": ("name", "uid", "title", "url", "duration_text", "peak_text", "room_id", "time"),
-    "follower": ("name", "uid", "follower_text", "milestone_text", "url", "time"),
-    "test": ("name", "uid", "url", "time"),
+    "dynamic_new": ("name", "uid", "text", "title", "url", "link", "time"),
+    "dynamic_repost": ("name", "uid", "text", "title", "url", "link", "time", "orig_author", "orig_text"),
+    "dynamic_video": ("name", "uid", "title", "text", "url", "link", "duration", "play_text", "bvid", "time"),
+    "dynamic_article": ("name", "uid", "title", "text", "url", "link", "time"),
+    "dynamic_audio": ("name", "uid", "title", "text", "url", "link", "time"),
+    "live_on": ("name", "uid", "title", "url", "link", "link_label", "area", "online_text", "room_id", "time"),
+    "live_off": ("name", "uid", "title", "url", "link", "link_label", "duration_text", "peak_text", "room_id", "time"),
+    "follower": ("name", "uid", "follower_text", "milestone_text", "url", "link", "time"),
+    "test": ("name", "uid", "url", "link", "time"),
 }
+
+
+def link_label(kind: str) -> str:
+    return LINK_LABELS.get(kind, "查看原文")
 
 
 class _SafeDict(dict):
@@ -52,14 +69,28 @@ def template_for(event: MonitorEvent, custom: Mapping[str, str] | None = None) -
     return DEFAULT_TEMPLATES.get(event.kind, DEFAULT_TEMPLATES["dynamic_new"])
 
 
-def build_fields(event: MonitorEvent) -> dict[str, str]:
-    """把事件摊平成模板占位符；同时给出 ``*_text`` 的人性化数字。"""
+def build_fields(event: MonitorEvent, *, link_style: str = "url") -> dict[str, str]:
+    """把事件摊平成模板占位符；同时给出 ``*_text`` 的人性化数字。
+
+    ``link_style`` 决定 ``{link}`` 的写法：
+    - ``url``：``点击进入直播间：https://…``（所有通道都认，客户端会自动识别网址）
+    - ``markdown``：``[点击进入直播间](https://…)``（QQ 官方通道按 markdown 发时可点）
+    """
+    label = link_label(event.kind)
+    if not event.url:
+        link_text = ""
+    elif str(link_style).lower() == "markdown":
+        link_text = f"[{label}]({event.url})"
+    else:
+        link_text = f"{label}：{event.url}"
     fields: dict[str, str] = {
         "name": event.uname or str(event.uid),
         "uid": str(event.uid),
         "title": event.title,
         "text": event.text,
         "url": event.url,
+        "link": link_text,
+        "link_label": label,
         "time": _format_time(event.published_at),
         "date": _format_time(event.published_at, with_time=False),
         "face": event.face,
@@ -84,14 +115,24 @@ def build_fields(event: MonitorEvent) -> dict[str, str]:
     return fields
 
 
-def render_text(event: MonitorEvent, *, custom: Mapping[str, str] | None = None, include_link: bool = True) -> str:
+def render_text(
+    event: MonitorEvent,
+    *,
+    custom: Mapping[str, str] | None = None,
+    include_link: bool = True,
+    link_style: str = "url",
+) -> str:
     template = template_for(event, custom)
-    text = template.format_map(_SafeDict(build_fields(event)))
+    text = template.format_map(_SafeDict(build_fields(event, link_style=link_style)))
     # 聊天里没法直接输入换行，允许用户写 \n 表示换行（旧版自定义文案也是这么写的）
     text = text.replace("\\n", "\n")
     if not include_link:
-        # 去掉模板里单独占一行的链接
-        lines = [line for line in text.split("\n") if line.strip() != event.url]
+        # 去掉带链接的那一行（{url} / {link} 的两种写法都会命中）
+        lines = [
+            line
+            for line in text.split("\n")
+            if line.strip() != event.url and (not event.url or event.url not in line)
+        ]
         text = "\n".join(lines)
     return text.strip()
 
@@ -105,6 +146,7 @@ def build_chain(
     at_ids: tuple[str, ...] = (),
     with_images: bool = False,
     max_images: int = 3,
+    link_style: str = "url",
 ) -> MessageChain:
     """组装一条提醒消息链：@ -> 文本 -> 配图。"""
     chain = MessageChain()
@@ -114,11 +156,25 @@ def build_chain(
     for ident in at_ids:
         chain.at(str(ident))
         chain.text(" ")
-    chain.text(render_text(event, custom=custom, include_link=include_link))
+    chain.text(render_text(event, custom=custom, include_link=include_link, link_style=link_style))
     if with_images:
         for url in event.images[:max_images]:
             chain.text("\n").image(url=url)
     return chain
+
+
+def link_chain(event: MonitorEvent, *, link_style: str = "url") -> MessageChain:
+    """单独一条「▶ 按钮名：链接」的文本消息。
+
+    卡片是 PNG，图里的按钮点不了；补这条文本，QQ 客户端会把网址识别成可点链接，
+    真正做到「点击进入直播间」。官方通道用 markdown 链接更接近「按钮」观感。
+    """
+    if not event.url:
+        return MessageChain()
+    label = link_label(event.kind)
+    if str(link_style).lower() == "markdown":
+        return MessageChain().text(f"▶ [{label}]({event.url})")
+    return MessageChain().text(f"▶ {label}：{event.url}")
 
 
 def _format_time(ts: int, *, with_time: bool = True) -> str:
@@ -180,7 +236,15 @@ def card_html(event: MonitorEvent, *, custom: Mapping[str, str] | None = None,
     avatar_html = (
         f'<img class="avatar" src="{avatar}" alt="" />' if avatar else '<div class="avatar ph"></div>'
     )
-    link_html = f'<div class="link">{link}</div>' if link else ""
+    button_label = html_escape(fields.get("link_label") or "查看原文")
+    link_html = (
+        '<div class="actions">'
+        f'<a class="btn" href="{link}">▶ {button_label}</a>'
+        f'<span class="url">{link}</span>'
+        "</div>"
+        if link
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8" />
@@ -205,9 +269,14 @@ def card_html(event: MonitorEvent, *, custom: Mapping[str, str] | None = None,
   .cover {{ display: block; width: 100%; border-radius: 12px; margin-top: 14px; }}
   .chips {{ margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }}
   .chip {{ font-size: 12px; color: #5a6472; background: #eef1f6; border-radius: 8px; padding: 5px 10px; }}
+  .actions {{ margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+  .btn {{ display: inline-flex; align-items: center; gap: 6px; text-decoration: none;
+          padding: 11px 22px; border-radius: 999px; font-size: 15px; font-weight: 600;
+          color: #fff; background: linear-gradient(135deg, #00A1D6 0%, #00c3ff 100%);
+          box-shadow: 0 4px 12px rgba(0, 161, 214, .30); white-space: nowrap; }}
+  .url {{ font-size: 11.5px; color: #98a2b3; word-break: break-all; }}
   .foot {{ padding: 0 20px 18px; display: flex; justify-content: space-between; align-items: center;
            font-size: 12px; color: #98a2b3; }}
-  .link {{ color: #00a1d6; max-width: 78%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
 </style></head>
 <body><div class="card">
   <div class="head">
@@ -223,8 +292,9 @@ def card_html(event: MonitorEvent, *, custom: Mapping[str, str] | None = None,
     <div class="text">{body}</div>
     {cover_html}
     {f'<div class="chips">{meta_html}</div>' if meta_html else ''}
+    {link_html}
   </div>
-  <div class="foot"><span>{when}</span>{link_html}</div>
+  <div class="foot"><span>{when}</span><span>bili_monitor</span></div>
 </div></body></html>"""
 
 
@@ -305,6 +375,23 @@ def help_text() -> str:
     return "\n".join(lines).rstrip()
 
 
+def help_markdown(*, version: str = "") -> str:
+    """命令速查的 **Markdown 版**：官方机器人通道默认按 markdown 发，不碰媒体上传。
+
+    QQ 官方 markdown 支持有限（加粗、换行、链接），所以只用 `**加粗**` + 换行排版，
+    不依赖列表、表格这些不一定渲染的语法。
+    """
+    lines = ["**B 站监控助手 · 命令速查**"]
+    if version:
+        lines.append(f"v{version} · 群里先 @机器人，前缀默认 /")
+    for title, _color, items in HELP_GROUPS:
+        lines.append("")
+        lines.append(f"**{title}**")
+        for syntax, desc in items:
+            lines.append(f"{syntax} — {desc}")
+    return "\n".join(lines).rstrip()
+
+
 def help_html(*, version: str = "") -> str:
     """命令速查卡片：自包含 HTML，交给本体截图端口渲染成图片。"""
     blocks: list[str] = []
@@ -365,6 +452,7 @@ __all__ = [
     "card_html",
     "describe_template_fields",
     "help_html",
+    "help_markdown",
     "help_text",
     "render_text",
     "summary_line",

@@ -32,11 +32,19 @@ from .bili_model import (
     parse_target_spec,
     target_label,
 )
-from .bili_notify import HostSender, HtmlCardRenderer, conversation_for, target_from_context
+from .bili_notify import (
+    OFFICIAL,
+    HostSender,
+    HtmlCardRenderer,
+    conversation_for,
+    media_allowed,
+    target_from_context,
+)
 from .bili_render import (
     DEFAULT_TEMPLATES,
     describe_template_fields,
     help_html,
+    help_markdown,
     help_text,
     render_text,
 )
@@ -49,7 +57,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -249,7 +257,25 @@ def _help_text() -> str:
 
 
 async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
-    """命令速查：优先渲染成图片发到当前会话，渲染不可用时回退文本。"""
+    """命令速查：官方通道发 Markdown 卡片，其它通道发图片，失败回退文本。
+
+    官方机器人通道的富媒体要让 QQ 按 URL 去拉文件，本体的图片在本地文件服务里，
+    QQ 拉不到会报「富媒体文件下载失败」；而官方协议本身支持 markdown（msg_type=2），
+    所以这类通道直接用 Markdown 排版，既好看又完全不碰媒体上传。
+    """
+    fmt = str(getattr(runtime.config, "help_format", "auto") or "auto").lower()
+    if fmt == "auto":
+        # 官方通道（或图片通道已熔断）走 Markdown，不碰媒体上传
+        use_markdown = runtime.sender.channel == OFFICIAL or not media_allowed(
+            runtime.config, runtime.sender
+        )
+        fmt = "markdown" if use_markdown else "image"
+    if fmt == "text":
+        return help_text()
+    if fmt == "markdown":
+        return help_markdown(version=VERSION)
+    if not media_allowed(runtime.config, runtime.sender):
+        return help_text()
     image = await runtime.cards.render_html(
         help_html(version=VERSION), width=760, height=1200
     )
@@ -264,7 +290,9 @@ async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
                 )
                 return None  # 已经把图发出去了，宿主不用再发文本
             except Exception as exc:  # noqa: BLE001 - 发图失败退回文本
-                _log("warning", f"命令速查图片发送失败，改发文本：{exc}")
+                # 失败一次就把这个进程里的图片通道关掉，避免每次都要撞一次
+                runtime.sender.media_blocked = True
+                _log("warning", f"命令速查图片发送失败，之后只发文本：{exc}")
     return help_text()
 
 
@@ -899,9 +927,12 @@ async def _on_load(ctx: Any) -> None:
     except Exception as exc:  # noqa: BLE001 - 修正失败不影响加载
         ctx.logger.warning(f"推送目标归一化失败：{exc}")
     sub_count = await store.count_subscriptions()
-    ctx.logger.info(f"B 站监控插件已加载：{sub_count} 个订阅，登录态={'有' if api.has_login else '无'}")
+    ctx.logger.info(
+        f"B 站监控插件已加载：{sub_count} 个订阅，登录态={'有' if api.has_login else '无'}，"
+        f"通道={sender.channel or '未知'}"
+    )
     if sub_count and not cards.available:
-        ctx.logger.info("本体截图能力不可用，card 模式会自动降级为文本+原图")
+        ctx.logger.info("本体截图能力不可用，card 模式会自动降级为文本 + 原图")
 
 
 def _validated_config(config: BiliMonitorConfig) -> BiliMonitorConfig:

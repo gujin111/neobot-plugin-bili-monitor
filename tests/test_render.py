@@ -105,6 +105,53 @@ def test_build_chain_without_images(model, render):
     assert [seg for seg in chain.segments if seg.type == "image"] == []
 
 
+# ---------------------------------------------------------------- 链接按钮
+def test_live_link_is_button_label_in_text(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    text = render.render_text(event)
+    assert "▶ 点击进入直播间：https://live.bilibili.com/21852" in text
+
+
+def test_video_link_uses_own_label(model, render):
+    event = _event(model, kind="dynamic_video", url="https://www.bilibili.com/video/BV1xx")
+    assert "观看视频：https://www.bilibili.com/video/BV1xx" in render.render_text(event)
+
+
+def test_markdown_link_style(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    text = render.render_text(event, link_style="markdown")
+    assert "▶ [点击进入直播间](https://live.bilibili.com/21852)" in text
+
+    chain = render.link_chain(event, link_style="markdown")
+    assert chain.plain_text == "▶ [点击进入直播间](https://live.bilibili.com/21852)"
+
+
+def test_link_chain_carries_clickable_url(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    chain = render.link_chain(event)
+    assert chain.plain_text == "▶ 点击进入直播间：https://live.bilibili.com/21852"
+    assert len(chain) == 1
+
+
+def test_link_chain_empty_without_url(model, render):
+    event = _event(model, url="")
+    assert len(render.link_chain(event)) == 0
+
+
+def test_card_renders_button(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    html = render.card_html(event)
+    assert 'class="btn"' in html
+    assert "▶ 点击进入直播间" in html
+    assert 'href="https://live.bilibili.com/21852"' in html
+
+
+def test_card_button_hidden_when_link_disabled(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    html = render.card_html(event, include_link=False)
+    assert 'class="btn"' not in html
+
+
 def test_card_html_escapes_user_content(model, render):
     event = _event(model, text='<script>alert("x")</script>', title="<b>标题</b>")
     html = render.card_html(event)
@@ -160,3 +207,16 @@ def test_help_text_lists_all_groups(render):
         for syntax, _desc in items:
             assert syntax in text
     assert "@机器人" in text
+
+
+def test_help_markdown_is_marked_up(render):
+    md = render.help_markdown(version="9.9.9")
+    assert md.startswith("**B 站监控助手 · 命令速查**")
+    assert "v9.9.9" in md
+    for title, _color, items in render.HELP_GROUPS:
+        assert f"**{title}**" in md
+        for syntax, desc in items:
+            assert f"{syntax} — {desc}" in md
+    # 只用加粗 + 换行，不含 markdown 表格（命令里的 | 是语法占位符，不算）
+    assert "\n|" not in md
+    assert "---|" not in md

@@ -379,3 +379,56 @@ async def test_admin_help_uses_image_too(loaded_plugin, monkeypatch):
     assert await registry.commands["b站管理"].handler(_Ctx("help")) is None
     assert calls == ["render", "image"]
     await pkg.plugin.on_stop()
+
+
+async def test_help_on_official_channel_uses_markdown(loaded_plugin, monkeypatch):
+    """官方通道发图会卡在富媒体上传，改发 Markdown 卡片，连渲染都不做。"""
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    runtime.sender.channel = "official"
+    calls: list[str] = []
+
+    async def fake_render(html, **kwargs):
+        calls.append("render")
+        return b"png"
+
+    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
+
+    result = await registry.commands["b站管理"].handler(_Ctx(""))
+
+    assert isinstance(result, str)
+    assert result.startswith("**B 站监控助手 · 命令速查**")
+    assert "**所有人 · 查看**" in result
+    assert "/b站管理 add <uid|链接> [直播间号] — 添加监控，推到当前会话" in result
+    assert calls == [], "Markdown 版不需要渲染图片"
+    await pkg.plugin.on_stop()
+
+
+async def test_help_format_markdown_on_onebot(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    runtime.config.help_format = "markdown"
+
+    result = await registry.commands["b站监控"].handler(_Ctx("help"))
+
+    assert isinstance(result, str) and result.startswith("**B 站监控助手")
+    await pkg.plugin.on_stop()
+
+
+async def test_help_image_failure_disables_media(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    calls: list[str] = []
+
+    async def fake_render(html, **kwargs):
+        calls.append("render")
+        return b"png"
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("MediaUploadError: 上传官方富媒体失败：富媒体文件下载失败")
+
+    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
+    monkeypatch.setattr(runtime.ctx, "send_image", boom)
+
+    result = await registry.commands["b站监控"].handler(_Ctx("help"))
+
+    assert isinstance(result, str) and "/b站管理" in result, "发图失败要退回文本"
+    assert runtime.sender.media_blocked is True, "失败一次后本进程不再发图"
+    await pkg.plugin.on_stop()

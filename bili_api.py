@@ -606,6 +606,33 @@ class BiliClient:
             return "expired", {}
         return "error", {}
 
+    async def download_image(self, url: str, *, max_bytes: int = 8 * 1024 * 1024) -> bytes | None:
+        """把图片下载到内存里，供「按字节发送」使用。
+
+        官方机器人通道在上传富媒体时会让 QQ 去拉图片地址，B 站 CDN 有防盗链，
+        经常报「富媒体文件下载失败」。插件自己带 Referer 下载再交给通道上传，
+        就绕开了这一步。
+        """
+        if self._client is None or not url:
+            return None
+        headers = {
+            "Referer": "https://www.bilibili.com/",
+            "User-Agent": self._ua,
+            "Accept": "image/avif,image/webp,image/*,*/*;q=0.8",
+        }
+        try:
+            response = await self._client.get(url, headers=headers, follow_redirects=True)
+        except httpx.HTTPError as exc:
+            self._log_once(f"img:{url[:40]}", "warning", f"图片下载失败：{exc}")
+            return None
+        if response.status_code >= 400:
+            self._log_once(f"img:{url[:40]}", "warning", f"图片下载失败：HTTP {response.status_code}")
+            return None
+        data = response.content
+        if not data or len(data) > max_bytes:
+            return None
+        return data
+
     async def check_login(self) -> str:
         """返回当前登录账号昵称，未登录返回空字符串。"""
         try:

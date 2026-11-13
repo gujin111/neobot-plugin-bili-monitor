@@ -30,7 +30,7 @@ plugins/
 
 **手动**：把本目录整个放到 NeoBot 数据目录的 `plugins/bili_monitor/`，重启或热重载。
 
-要求 NeoBot **2.1.0 及以上**；`python_dependencies` 里的 `httpx / sqlalchemy / aiosqlite /
+要求 NeoBot **2.1.0a7 及以上**（已在 **a8 / a9** 上跑通测试与 `sdk check`；a9 的官方通道主动消息 `proactive` 已适配）；`python_dependencies` 里的 `httpx / sqlalchemy / aiosqlite /
 pydantic` 由面板自动安装（本体已自带）。
 
 ## 快速开始
@@ -120,6 +120,34 @@ pydantic` 由面板自动安装（本体已自带）。
 
 单条动态分类与旧版一致：一条动态只归到一个类别（视频投稿不会再重复发「新动态」）。
 **置顶动态会被跳过**，避免订阅时把旧内容当新动态推送。
+
+### 链接按钮
+
+默认发**文字链接**：消息里只显示按钮名，网址藏在链接里。
+
+```
+▶ [点击进入直播间](https://live.bilibili.com/21852)
+```
+
+在支持 markdown 的通道（官方机器人默认 `qq_markdown=true`）里，它渲染成可点的
+「▶ 点击进入直播间」，不会把长网址糊在消息里。
+
+| 配置 `link_style` | 表现 |
+| --- | --- |
+| `auto` / `markdown`（默认） | `▶ [点击进入直播间](https://…)` —— 只显示文字，网址隐藏 |
+| `url` | `▶ 点击进入直播间：https://…` —— 文字 + 裸网址 |
+
+按钮名按事件类型自动取：开播/下播 `点击进入直播间`、视频 `观看视频`、专栏 `阅读专栏`、动态 `查看动态`。
+`include_link` 关掉则按钮与链接一起去掉。
+
+> 如果所在通道把 markdown 降级成纯文本，`[文字](网址)` 的方括号会露出来；
+> 这时把 `link_style` 设成 `url` 即可退回「文字 + 裸网址」。
+>
+> **为什么不是真正的「按钮」**：NeoBot 2.1 的官方适配器只组装 `content` / `markdown` / `media`
+> 三类 payload，官方文档把「内嵌键盘/按钮/ARK」列为**非目标**，插件无法发送 `keyboard`。
+>
+> 官方通道的图片要走富媒体上传（QQ 按 URL 去拉文件），本地文件服务常常拉不到，
+> 因此官方通道默认**不发图**（帮助卡片改为 markdown），`media_mode=always` 可强制。
 
 ## 文案模板
 

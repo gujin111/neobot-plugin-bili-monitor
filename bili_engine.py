@@ -28,7 +28,8 @@ from .bili_model import (
     is_pinned,
     parse_dynamic_item,
 )
-from .bili_render import build_chain, render_text
+from .bili_notify import media_allowed
+from .bili_render import build_chain, link_chain, render_text
 from .bili_store import BiliStore, Subscription
 
 #: 单次轮询里个别订阅失败后的冷却（秒）：指数退避，上限 30 分钟
@@ -72,6 +73,8 @@ class MonitorEngine:
         self._gate_lock = asyncio.Lock()
         self._last_push = 0.0
         self._cooldown_logged = 0.0
+        #: 图片通道是否被判死刑（官方通道上传失败过一次就不再尝试）
+        self._media_blocked = False
         self.stats = {
             "cycles": 0, "events": 0, "pushed": 0, "skipped": 0,
             "failed": 0, "last_error": "", "last_push_at": 0.0, "cooldown_left": 0,
@@ -374,31 +377,122 @@ class MonitorEngine:
             self.stats["last_push_at"] = time.time()
         return ok
 
+    def _proactive_kwargs(self, proactive: bool) -> dict[str, Any]:
+        """宿主支持 proactive 时才传（a9 起官方通道需要它发主动消息）。"""
+        if getattr(self._sender, "supports_proactive_kw", False):
+            return {"proactive": proactive}
+        return {}
+
     async def _send(self, sub: Subscription, event: MonitorEvent, kind: str, target_id: str,
-                    custom: dict[str, str]) -> bool:
+                    custom: dict[str, str], *, proactive: bool = True) -> bool:
         at_all = bool(sub.at_all) and (
             not self._config.at_all_on_live_only or event.kind == "live_on"
         )
         mode = (sub.send_mode or self._config.send_mode or "auto").strip().lower()
         if mode == "auto":
             mode = "image" if event.images else "text"
+        kwargs = self._proactive_kwargs(proactive)
 
-        if mode == "card" and self._cards is not None and self._cards.available:
-            data = await self._cards.render(event, custom)
+        # 官方通道上传图片会卡在富媒体（QQ 拉不到本地文件），直接走文字
+        if (
+            mode == "card"
+            and self._cards is not None
+            and self._cards.available
+            and self._media_enabled()
+        ):
+            data = None
+            try:
+                data = await self._cards.render(event, custom)
+            except Exception as exc:  # noqa: BLE001 - 渲染失败不能丢提醒
+                self._log("warning", f"卡片渲染失败，改发文本：{exc}")
             if data:
                 await self._gate()
-                return await self._sender.send_image(kind, target_id, data, f"bili-{event.kind}.png")
+                sent = False
+                try:
+                    sent = await self._sender.send_image(
+                        kind, target_id, data, f"bili-{event.kind}.png", **kwargs
+                    )
+                except Exception as exc:  # noqa: BLE001 - 上传失败退回文本
+                    self._block_media(f"卡片上传失败：{exc}")
+                if sent:
+                    # 卡片是图片，补一条文字链接方便点开
+                    if self._config.include_link and event.url:
+                        await self._gate()
+                        await self._send_link(kind, target_id, event, **kwargs)
+                    return True
 
+        # 文本永远单独发；图片改为「自己下载 + 字节上传」，不再把 URL 交给通道
         chain = build_chain(
             event, custom=custom,
             include_link=bool(self._config.include_link),
             at_all=at_all,
             at_ids=tuple(sub.at_ids),
-            with_images=mode in {"image", "card"},
-            max_images=3 if mode == "image" else 1,
+            with_images=False,
+            link_style=self._link_style(),
         )
         await self._gate()
-        return await self._sender.send_chain(kind, target_id, chain)
+        sent = await self._sender.send_chain(kind, target_id, chain, **kwargs)
+        if sent and mode in {"image", "card"}:
+            await self._send_images(kind, target_id, event, **kwargs)
+        return sent
+
+    async def _send_images(self, kind: str, target_id: str, event: MonitorEvent,
+                           **kwargs: Any) -> int:
+        """下载原图后按字节发送；单张失败只跳过，不影响整条提醒。"""
+        if not self._media_enabled():
+            return 0
+        limit = max(0, int(getattr(self._config, "max_images", 2) or 0))
+        if not limit:
+            return 0
+        sent = 0
+        for url in event.images[:limit]:
+            data = await self._api.download_image(url)
+            if not data:
+                self._log("warning", f"图片下载失败，跳过：{url[:60]}")
+                continue
+            try:
+                await self._gate()
+                await self._sender.send_image(kind, target_id, data, "bili.jpg", **kwargs)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001 - 单张失败不影响文本
+                self._block_media(f"图片上传失败：{exc}")
+                break
+        return sent
+
+    def _media_enabled(self) -> bool:
+        """能不能发图片：熔断标记 + `media_mode` + 通道。"""
+        if self._media_blocked:
+            return False
+        return media_allowed(self._config, self._sender)
+
+    def _block_media(self, reason: str) -> None:
+        if not self._media_blocked:
+            self._media_blocked = True
+            # 同步给发送器：帮助卡片等其它发图入口也一并停掉
+            if hasattr(self._sender, "media_blocked"):
+                self._sender.media_blocked = True
+            self._log("warning", f"图片通道不可用（{reason}），后续只发文字提醒")
+
+    def _link_style(self) -> str:
+        """``markdown`` 或 ``url``。
+
+        默认 ``markdown``：提醒里只显示「▶ 点击进入直播间」，网址藏在链接里
+        （`[点击进入直播间](https://…)`），不会把长网址糊在消息里。
+        如果所在通道把 markdown 降级成纯文本、导致方括号裸露，把 `link_style`
+        设成 ``url`` 即可退回「文字 + 裸网址」。
+        """
+        style = str(getattr(self._config, "link_style", "auto") or "auto").lower()
+        if style == "auto":
+            return "markdown"
+        return style
+
+    async def _send_link(self, kind: str, target_id: str, event: MonitorEvent,
+                         **kwargs: Any) -> bool:
+        """补一条链接消息（文字链接，网址藏在链接里）。"""
+        chain = link_chain(event, link_style=self._link_style())
+        if len(chain) == 0:
+            return True
+        return await self._sender.send_chain(kind, target_id, chain, **kwargs)
 
     async def _gate(self) -> None:
         """全局推送节流（旧版「防屏蔽延迟」）。"""
@@ -489,7 +583,8 @@ class MonitorEngine:
             url=f"https://space.bilibili.com/{sub.uid}",
             extra={"room_id": sub.room_id or ""},
         )
-        return await self._send(sub, event, kind, target_id, sub.template_map)
+        # 测试提醒是命令触发的，还在被动回复窗口里，按被动消息发即可
+        return await self._send(sub, event, kind, target_id, sub.template_map, proactive=False)
 
     async def preview_text(self, sub: Subscription, kind: str) -> str:
         """给配置命令回显一版示例文案。"""
