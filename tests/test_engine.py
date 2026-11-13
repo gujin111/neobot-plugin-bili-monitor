@@ -461,10 +461,9 @@ async def test_media_mode_always_forces_images_on_official(engine_mod, store_mod
     assert len(sender.images) == 1
 
 
-async def test_link_defaults_to_text_link(engine_mod, store_mod):
-    """默认发文字链接：只显示「▶ 点击进入直播间」，网址藏在链接里。"""
+async def test_link_defaults_to_html_anchor_on_official(engine_mod, store_mod):
+    """官方通道默认用 <a> 锚点：显示「点击进入直播间」，不露网址。"""
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.is_official = True
     sender.channel = "official"
     engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
     sub = make_sub(store_mod)
@@ -473,14 +472,27 @@ async def test_link_defaults_to_text_link(engine_mod, store_mod):
     await engine._dispatch(sub, _live_event(engine_mod))
 
     text = sender.sent[0][2].plain_text
-    assert "▶ [点击进入直播间](https://live.bilibili.com/555)" in text
-    # 不把裸网址单独糊在消息里
+    assert '<a href="https://live.bilibili.com/555" target="_blank" rel="noopener noreferrer">点击进入直播间</a>' in text
     assert "点击进入直播间：https" not in text
+
+
+async def test_link_defaults_to_bare_url_on_onebot(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    sender.channel = "onebot"
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "text"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    text = sender.sent[0][2].plain_text
+    assert "点击进入直播间：https://live.bilibili.com/555" in text
+    assert "<a href" not in text
 
 
 async def test_link_style_url_is_opt_in(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.is_official = True
+    sender.channel = "official"
     engine = build_engine(engine_mod, store, api, sender, make_config(link_style="url"))
     sub = make_sub(store_mod)
     sub.send_mode = "text"
@@ -492,17 +504,15 @@ async def test_link_style_url_is_opt_in(engine_mod, store_mod):
     assert "[点击进入直播间]" not in text
 
 
-async def test_onebot_channel_also_uses_text_link(engine_mod, store_mod):
+async def test_link_style_markdown_is_opt_in(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.is_official = False
-    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="markdown"))
     sub = make_sub(store_mod)
     sub.send_mode = "text"
 
     await engine._dispatch(sub, _live_event(engine_mod))
 
-    text = sender.sent[0][2].plain_text
-    assert "▶ [点击进入直播间](https://live.bilibili.com/555)" in text
+    assert "[点击进入直播间](https://live.bilibili.com/555)" in sender.sent[0][2].plain_text
 
 
 async def test_official_channel_never_sends_images(engine_mod, store_mod):

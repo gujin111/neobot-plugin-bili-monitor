@@ -117,6 +117,25 @@ def test_video_link_uses_own_label(model, render):
     assert "观看视频：https://www.bilibili.com/video/BV1xx" in render.render_text(event)
 
 
+def test_html_link_style(model, render):
+    event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
+    text = render.render_text(event, link_style="html")
+    assert (
+        '<a href="https://live.bilibili.com/21852" target="_blank" rel="noopener noreferrer">'
+        "点击进入直播间</a>"
+    ) in text
+
+    chain = render.link_chain(event, link_style="html")
+    assert chain.plain_text.startswith("▶ <a href=")
+
+
+def test_html_link_escapes_url(model, render):
+    event = _event(model, kind="live_on", url='https://x/"onmouseover="alert(1)')
+    text = render.render_text(event, link_style="html")
+    assert 'onmouseover="alert(1)"' not in text
+    assert "&quot;" in text
+
+
 def test_markdown_link_style(model, render):
     event = _event(model, kind="live_on", url="https://live.bilibili.com/21852")
     text = render.render_text(event, link_style="markdown")

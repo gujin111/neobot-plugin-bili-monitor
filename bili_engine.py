@@ -29,7 +29,7 @@ from .bili_model import (
     is_pinned,
     parse_dynamic_item,
 )
-from .bili_notify import media_allowed
+from .bili_notify import OFFICIAL, media_allowed
 from .bili_render import build_chain, link_chain, render_text
 from .bili_store import BiliStore, Subscription
 
@@ -475,16 +475,16 @@ class MonitorEngine:
             self._log("warning", f"图片通道不可用（{reason}），后续只发文字提醒")
 
     def _link_style(self) -> str:
-        """``markdown`` 或 ``url``。
+        """``html`` / ``markdown`` / ``url`` 三种写法。
 
-        默认 ``markdown``：提醒里只显示「▶ 点击进入直播间」，网址藏在链接里
-        （`[点击进入直播间](https://…)`），不会把长网址糊在消息里。
-        如果所在通道把 markdown 降级成纯文本、导致方括号裸露，把 `link_style`
-        设成 ``url`` 即可退回「文字 + 裸网址」。
+        - 官方通道默认 ``html``：``<a href="…" target="_blank">点击进入直播间</a>``，
+          QQ 官方 markdown 认这个标签，点文字直接跳转；
+        - OneBot 默认 ``url``：裸网址，客户端会自动识别成可点链接。
+        想固定写法可把 `link_style` 设成具体值。
         """
-        style = str(getattr(self._config, "link_style", "auto") or "auto").lower()
+        style = str(cfg(self._config, "link_style") or "auto").lower()
         if style == "auto":
-            return "markdown"
+            return "html" if getattr(self._sender, "channel", "") == OFFICIAL else "url"
         return style
 
     async def _send_link(self, kind: str, target_id: str, event: MonitorEvent,

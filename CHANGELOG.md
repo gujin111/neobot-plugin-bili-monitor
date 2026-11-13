@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.8 — 2026-11-13
+
+### 变更
+
+- 链接改用 **HTML 锚点**：`▶ <a href="https://live.bilibili.com/…" target="_blank"
+  rel="noopener noreferrer">点击进入直播间</a>`，只显示文字、点文字跳转
+- 按通道自动选写法：官方通道用锚点（QQ 官方 markdown 支持 `<a>`），
+  OneBot 用裸网址（客户端会自动识别）；`link_style` 仍可强制
+  `html` / `markdown` / `url`
+- URL 写入 `href` 前做 HTML 转义，避免属性注入
+
 ## 1.0.7 — 2026-11-13
 
 ### 精简

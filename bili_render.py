@@ -73,13 +73,21 @@ def build_fields(event: MonitorEvent, *, link_style: str = "url") -> dict[str, s
     """把事件摊平成模板占位符；同时给出 ``*_text`` 的人性化数字。
 
     ``link_style`` 决定 ``{link}`` 的写法：
-    - ``url``：``点击进入直播间：https://…``（所有通道都认，客户端会自动识别网址）
-    - ``markdown``：``[点击进入直播间](https://…)``（QQ 官方通道按 markdown 发时可点）
+    - ``html``：``<a href="…" target="_blank" rel="noopener noreferrer">点击进入直播间</a>``
+      （QQ 官方 markdown 认这种标签，点文字即可跳转）
+    - ``markdown``：``[点击进入直播间](https://…)``
+    - ``url``：``点击进入直播间：https://…``（纯文本通道，客户端会自动识别网址）
     """
     label = link_label(event.kind)
+    style = str(link_style).lower()
     if not event.url:
         link_text = ""
-    elif str(link_style).lower() == "markdown":
+    elif style == "html":
+        link_text = (
+            f'<a href="{html_escape(event.url)}" target="_blank" rel="noopener noreferrer">'
+            f"{html_escape(label)}</a>"
+        )
+    elif style == "markdown":
         link_text = f"[{label}]({event.url})"
     else:
         link_text = f"{label}：{event.url}"
@@ -164,15 +172,18 @@ def build_chain(
 
 
 def link_chain(event: MonitorEvent, *, link_style: str = "url") -> MessageChain:
-    """单独一条「▶ 按钮名：链接」的文本消息。
-
-    卡片是 PNG，图里的按钮点不了；补这条文本，QQ 客户端会把网址识别成可点链接，
-    真正做到「点击进入直播间」。官方通道用 markdown 链接更接近「按钮」观感。
-    """
+    """单独一条「▶ 链接」的文本消息（卡片图发出去后再补一条可点的）。"""
     if not event.url:
         return MessageChain()
     label = link_label(event.kind)
-    if str(link_style).lower() == "markdown":
+    style = str(link_style).lower()
+    if style == "html":
+        anchor = (
+            f'<a href="{html_escape(event.url)}" target="_blank" rel="noopener noreferrer">'
+            f"{html_escape(label)}</a>"
+        )
+        return MessageChain().text(f"▶ {anchor}")
+    if style == "markdown":
         return MessageChain().text(f"▶ [{label}]({event.url})")
     return MessageChain().text(f"▶ {label}：{event.url}")
 
