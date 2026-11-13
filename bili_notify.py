@@ -102,6 +102,22 @@ class HostSender:
             await self._ctx.send_image(conversation, data=data, filename=filename)
         return True
 
+    async def send_tuwen(
+        self, kind: str, target_id: str, content: dict[str, Any], *, proactive: bool = True
+    ) -> bool:
+        """发一条 QQ 官方**图文卡片**（msg_type=8）：文字 + 封面 + 可点整卡。
+
+        段名 ``official_tuwen`` 与内置开播推送插件一致；旧适配器不认识这个段，
+        ``ctx.send`` 会抛错或返回 failed，调用方据此退回文本。
+        """
+        conversation = conversation_for(self._ctx, kind, target_id)
+        message = [{"type": "official_tuwen", "data": content}]
+        if proactive and self.supports_proactive_kw:
+            result = await self._ctx.send(conversation, message, proactive=True)
+        else:
+            result = await self._ctx.send(conversation, message)
+        return getattr(result, "status", None) != "failed"
+
 
 def _accepts_kwarg(func: Any, name: str) -> bool:
     """宿主方法是否接受某个关键字参数（兼容 a7/a8 没有 proactive 的版本）。"""

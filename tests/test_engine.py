@@ -535,6 +535,53 @@ async def test_official_channel_skips_card_mode(engine_mod, store_mod):
     assert sender.images == []
 
 
+class FakeTuwenSender(FakeSender):
+    """支持官方图文卡片的发送器。"""
+
+    def __init__(self, *, tuwen_ok=True):
+        super().__init__()
+        self.tuwen_ok = tuwen_ok
+        self.tuwens: list[dict] = []
+
+    async def send_tuwen(self, kind, target_id, content, **kwargs):
+        if not self.tuwen_ok:
+            return False
+        self.tuwens.append(content)
+        return True
+
+
+async def test_official_channel_sends_tuwen_card(engine_mod, store_mod):
+    """官方通道优先发图文卡片：文字 + 封面 + 整卡可点，一条消息。"""
+    store, api, sender = FakeStore(), FakeApi(), FakeTuwenSender()
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    sub = make_sub(store_mod)
+    sub.send_mode = "auto"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    assert len(sender.tuwens) == 1
+    card = sender.tuwens[0]
+    assert card["title"].endswith("开播了")
+    assert card["url"] == "https://live.bilibili.com/555"
+    assert card["pic_url"].startswith("https://")
+    assert sender.sent == [], "图文卡片已经是完整一条消息，不再补文本"
+
+
+async def test_tuwen_failure_falls_back_to_text(engine_mod, store_mod):
+    store, api, sender = FakeStore(), FakeApi(), FakeTuwenSender(tuwen_ok=False)
+    sender.channel = "official"
+    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    sub = make_sub(store_mod)
+    sub.send_mode = "auto"
+
+    await engine._dispatch(sub, _live_event(engine_mod))
+
+    assert sender.tuwens == []
+    assert len(sender.sent) == 1, "卡片失败要退回文本"
+    assert "<a href" in sender.sent[0][2].plain_text
+
+
 async def test_media_failure_blocks_following_images(engine_mod, store_mod):
     """带图消息发送失败一次后熔断，后续只发文字。"""
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
@@ -622,7 +669,7 @@ def _live_event(engine_mod):
 
     return build_live_on(
         uid=546195, uname="老番茄", face="", room_id=555, title="直播",
-        cover="", area="游戏", online=1, start_ts=1700000000,
+        cover="https://i0.hdslb.com/cover.jpg", area="游戏", online=1, start_ts=1700000000,
     )
 
 

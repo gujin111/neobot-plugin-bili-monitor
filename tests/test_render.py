@@ -238,3 +238,23 @@ def test_help_markdown_is_marked_up(render):
     # 只用加粗 + 换行，不含 markdown 表格（命令里的 | 是语法占位符，不算）
     assert "\n|" not in md
     assert "---|" not in md
+
+def test_build_tuwen_card(model, render):
+    event = _event(
+        model, kind="live_on", title="今晚八点，决战",
+        cover="http://i0.hdslb.com/c.jpg", url="https://live.bilibili.com/21852",
+        extra={"area": "单机游戏", "online": 12000},
+    )
+    card = render.build_tuwen(event)
+    assert card is not None
+    assert card["title"] == "老番茄 开播了"
+    assert "今晚八点，决战" in card["description"]
+    assert "单机游戏" in card["description"]
+    assert card["url"] == "https://live.bilibili.com/21852"
+    assert card["pic_url"].startswith("https://")
+    assert len(card["title"]) <= 50 and len(card["description"]) <= 200
+
+
+def test_build_tuwen_requires_https_cover(model, render):
+    event = _event(model, kind="live_on", cover="", images=())
+    assert render.build_tuwen(event) is None

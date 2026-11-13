@@ -428,12 +428,78 @@ def help_blocks(version: str = "") -> list[dict[str, object]]:
     return blocks
 
 
+# ---------------------------------------------------------------- 官方图文卡片
+_TUWEN_TITLE_LIMIT = 50
+_TUWEN_DESCRIPTION_LIMIT = 200
+
+#: 图文卡片的标题后缀（跟着事件类型走）
+_TUWEN_TITLES: dict[str, str] = {
+    "live_on": "开播了",
+    "live_off": "下播了",
+    "dynamic_video": "投稿了新视频",
+    "dynamic_article": "发布了新专栏",
+    "dynamic_audio": "发布了新音频",
+    "dynamic_new": "发布了新动态",
+    "dynamic_repost": "转发了动态",
+    "follower": "粉丝里程碑",
+    "test": "测试提醒",
+}
+
+
+def _one_line(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _secure_url(value: Any) -> str:
+    """B 站 CDN 常给 http:// 或 //，官方图文卡片要求 https 公网地址。"""
+    text = str(value or "").strip()
+    if text.startswith("//"):
+        return "https:" + text
+    if text.startswith("http://"):
+        return "https://" + text[len("http://") :]
+    return text
+
+
+def build_tuwen(event: MonitorEvent) -> dict[str, str] | None:
+    """官方通道的**图文卡片**（msg_type=8）：文字 + 封面 + 可点链接合成一条消息。
+
+    与内置开播推送插件同一套写法：整张卡片可点，跳转 ``url``。
+    封面必须是 https 公网地址，否则返回 None（调用方退回纯文本链接）。
+    """
+    url = _secure_url(event.url)
+    pic = _secure_url(event.cover or (event.images[0] if event.images else ""))
+    if not url.startswith("https://") or not pic.startswith("https://"):
+        return None
+
+    suffix = _TUWEN_TITLES.get(event.kind, "有新动态")
+    title = _one_line(f"{event.uname or event.uid} {suffix}")[:_TUWEN_TITLE_LIMIT]
+
+    fields = build_fields(event)
+    parts: list[str] = []
+    if event.kind in {"live_on", "live_off"}:
+        parts.append(_one_line(event.title))
+        parts.append(_one_line(fields.get("area")))
+        parts.append(_one_line(fields.get("online_text") if event.kind == "live_on"
+                               else fields.get("peak_text")))
+    else:
+        parts.append(_one_line(event.title))
+        parts.append(_one_line(event.text)[:80])
+    description = _one_line(" · ".join(part for part in parts if part)) or "点击卡片查看详情"
+    return {
+        "title": title,
+        "description": description[:_TUWEN_DESCRIPTION_LIMIT],
+        "url": url,
+        "pic_url": pic,
+    }
+
+
 __all__ = [
     "DEFAULT_TEMPLATES",
     "HELP_GROUPS",
     "TEMPLATE_FIELDS",
     "build_chain",
     "build_fields",
+    "build_tuwen",
     "card_html",
     "describe_template_fields",
     "help_blocks",

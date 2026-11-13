@@ -31,7 +31,7 @@ from .bili_model import (
     parse_dynamic_item,
 )
 from .bili_notify import OFFICIAL, media_allowed
-from .bili_render import TEMPLATE_FIELDS, build_chain, link_chain, render_text
+from .bili_render import TEMPLATE_FIELDS, build_chain, build_tuwen, link_chain, render_text
 from .bili_store import BiliStore, Subscription
 
 #: 单次轮询里个别订阅失败后的冷却（秒）：指数退避，上限 30 分钟
@@ -396,6 +396,21 @@ class MonitorEngine:
         if mode == "auto":
             mode = "image" if event.images else "text"
         kwargs = self._proactive_kwargs(proactive)
+
+        # 官方通道：优先发「图文卡片」（文字 + 封面 + 整卡可点），与内置开播推送同一套写法
+        # 注意不走 _media_enabled()：卡片封面由适配器上传，不受「官方通道不发图」策略限制
+        if (
+            mode != "text"
+            and getattr(self._sender, "channel", "") == OFFICIAL
+            and callable(getattr(self._sender, "send_tuwen", None))
+        ):
+            tuwen = build_tuwen(event)
+            if tuwen:
+                try:
+                    if await self._sender.send_tuwen(kind, target_id, tuwen, **kwargs):
+                        return True
+                except Exception as exc:  # noqa: BLE001 - 卡片不行就退回文本
+                    self._log("warning", f"图文卡片发送失败，改发文本：{exc}")
 
         # 官方通道上传图片会卡在富媒体（QQ 拉不到本地文件），直接走文字
         if (
