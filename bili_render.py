@@ -348,6 +348,7 @@ HELP_GROUPS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
             ("/b站管理 test <uid>", "发一条测试提醒"),
             ("/b站管理 check <uid>", "立即检查一次"),
             ("/b站管理 sync <uid>", "刷新昵称 / 头像 / 直播间"),
+            ("/b站管理 diag", "帮助图链路诊断"),
         ),
     ),
     (

@@ -56,7 +56,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -316,24 +316,67 @@ async def _send_help_image(runtime: _Runtime, command_ctx: Any, png: bytes) -> b
 
 
 async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
-    """命令速查：默认发本体渲染的卡片图，渲染/发送失败再回退 Markdown 或文字。"""
+    """命令速查：先试卡片图，渲染或发送失败才回退 Markdown / 文字。
+
+    注意**不要按通道提前跳过发图**：官方通道到底能不能发图，取决于本体的文件服务
+    与媒体上传链路，插件猜不准，交给实际调用结果决定（失败会自动降级）。
+    """
     fmt = str(getattr(runtime.config, "help_format", "auto") or "auto").lower()
     if fmt == "text":
         return help_text()
     if fmt == "markdown":
-        return help_markdown(version=VERSION)
-    if fmt == "auto" and runtime.sender.channel == OFFICIAL:
-        # 官方通道的富媒体要靠 QQ 拉公网文件，默认直接给 Markdown，不撞媒体上传
         return help_markdown(version=VERSION)
 
     png = await _render_help_image(runtime)
     if png and await _send_help_image(runtime, command_ctx, png):
         return None  # 图已经发出去了，宿主不用再发文本
 
-    # 回退：官方通道优先 Markdown（可点、不依赖图片），其它通道给纯文本表
+    # 回退：官方通道给 Markdown（可点、不依赖图片），其它通道给纯文本表
     if runtime.sender.channel == OFFICIAL:
         return help_markdown(version=VERSION)
     return help_text()
+
+
+async def _diagnose_help(runtime: _Runtime, command_ctx: Any) -> str:
+    """排障：逐段报告帮助图链路哪一环断了。"""
+    lines = [
+        "帮助图链路诊断",
+        f"通道：{runtime.sender.channel or '未知（按非官方处理）'}",
+        f"help_format：{runtime.config.help_format}",
+    ]
+    try:
+        from neobot_app.runtime.html_card import render_card_html, render_card_image
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"卡片模块：导入失败（{type(exc).__name__}: {exc}）")
+        return "\n".join(lines)
+    lines.append("卡片模块：可导入")
+
+    port = getattr(runtime.ctx, "screenshots", None)
+    lines.append(f"截图端口：{'有' if port is not None else '无（渲染必失败）'}")
+    try:
+        html = render_card_html(
+            title="诊断卡片",
+            blocks=[{"kind": "note", "text": "help diag"}],
+            theme=str(getattr(runtime.config, "help_image_theme", "default") or "default"),
+            width=int(getattr(runtime.config, "help_image_width", 760) or 760),
+        )
+        lines.append(f"HTML 生成：成功（{len(html)} 字符）")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"HTML 生成：失败（{type(exc).__name__}: {exc}）")
+        return "\n".join(lines)
+    try:
+        png = await render_card_image(html, timeout=20.0, screenshots=port)
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"渲染：异常（{type(exc).__name__}: {exc}）")
+        png = None
+    else:
+        lines.append(f"渲染：{'成功（' + str(len(png)) + ' 字节）' if png else '返回 None（浏览器未启用/超时）'}")
+
+    service = getattr(command_ctx, "service", None)
+    sender = getattr(service, "send_image_bytes", None)
+    lines.append(f"命令服务发图：{'可用' if callable(sender) else '不可用（会退回 ctx.send_image）'}")
+    lines.append(f"媒体熔断：{'已触发' if getattr(runtime.sender, 'media_blocked', False) else '未触发'}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- 命令注册
@@ -733,6 +776,11 @@ async def _admin_help(runtime: _Runtime, command_ctx: Any, args: list[str]) -> s
     return await _send_help(runtime, command_ctx)
 
 
+async def _admin_diag(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
+    """帮助图链路诊断（`/b站管理 diag`）。"""
+    return await _diagnose_help(runtime, command_ctx)
+
+
 async def _admin_test(runtime: _Runtime, command_ctx: Any, args: list[str]) -> str:
     sub, error = await _resolve_sub(runtime, args[0] if args else "")
     if sub is None:
@@ -799,6 +847,7 @@ _ADMIN_HANDLERS = {
     "unpush": _admin_unpush, "解绑": _admin_unpush,
     "targets": _admin_targets, "目标": _admin_targets, "推送目标": _admin_targets,
     "help": _admin_help, "帮助": _admin_help, "菜单": _admin_help, "?": _admin_help, "？": _admin_help,
+    "diag": _admin_diag, "诊断": _admin_diag, "helpdiag": _admin_diag,
     "test": _admin_test, "测试": _admin_test,
     "check": _admin_check, "检查": _admin_check,
     "sync": _admin_sync, "刷新": _admin_sync,

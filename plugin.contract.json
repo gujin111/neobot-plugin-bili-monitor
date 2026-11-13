@@ -265,7 +265,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.5"
+    "version": "1.0.6"
   },
   "resources": [],
   "schema_version": 1

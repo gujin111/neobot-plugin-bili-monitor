@@ -429,19 +429,32 @@ async def test_help_without_host_module_falls_back(loaded_plugin, monkeypatch):
     await pkg.plugin.on_stop()
 
 
-async def test_help_on_official_channel_uses_markdown(loaded_plugin, monkeypatch):
-    """官方通道默认直接发 Markdown，不渲染图片、不碰媒体上传。"""
+async def test_help_on_official_channel_tries_image_first(loaded_plugin, monkeypatch):
+    """官方通道也先试图：能不能发图交给实际调用结果决定，不提前跳过。"""
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
     runtime.sender.channel = "official"
     card = _install_fake_card_module(monkeypatch)
+    service = _ImageService()
+
+    result = await registry.commands["b站管理"].handler(_Ctx("", service=service))
+
+    assert result is None, "发图成功就不该再发文本"
+    assert card.seen, "官方通道也应该尝试渲染卡片"
+    assert service.calls, "应该走命令服务的 send_image_bytes"
+    await pkg.plugin.on_stop()
+
+
+async def test_help_on_official_channel_falls_back_to_markdown(loaded_plugin, monkeypatch):
+    """发图失败时，官方通道回退 Markdown（可点、不依赖媒体上传）。"""
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    runtime.sender.channel = "official"
+    _install_fake_card_module(monkeypatch, fail=True)
 
     result = await registry.commands["b站管理"].handler(_Ctx("", service=_ImageService()))
 
     assert isinstance(result, str)
     assert result.startswith("**B 站监控助手 · 命令速查**")
     assert "**所有人 · 查看**" in result
-    assert "/b站管理 add <uid|链接> [直播间号] — 添加监控，推到当前会话" in result
-    assert card.seen == {}, "官方通道不该触发渲染"
     await pkg.plugin.on_stop()
 
 
@@ -469,4 +482,17 @@ async def test_help_image_send_failure_blocks_media(loaded_plugin, monkeypatch):
 
     assert isinstance(result, str) and "/b站管理" in result, "发图失败要退回文本"
     assert runtime.sender.media_blocked is True, "失败一次后本进程不再发图"
+    await pkg.plugin.on_stop()
+
+
+async def test_diag_command_reports_chain(loaded_plugin, monkeypatch):
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    _install_fake_card_module(monkeypatch)
+
+    text = await registry.commands["b站管理"].handler(_Ctx("diag", service=_ImageService()))
+
+    assert "帮助图链路诊断" in text
+    assert "卡片模块：可导入" in text
+    assert "渲染：成功" in text
+    assert "命令服务发图：可用" in text
     await pkg.plugin.on_stop()
