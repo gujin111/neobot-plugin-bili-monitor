@@ -87,24 +87,18 @@ pydantic` 由面板自动安装（本体已自带）。
 
 ## 配置项
 
-面板表单由 `bili_config.py` 生成，`plugin.toml` 的 `[config]` 是打包默认值。
+面板只保留 7 项最容易需要调的；其余（粉丝轮询间隔、推送节流、图片策略、
+帮助卡片主题等）由插件按宿主能力自动决定，默认值收在 `bili_config.DEFAULTS`。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
+| `command_prefix` | `/` | 命令前缀 |
 | `cookie` | 空 | `SESSDATA=...; bili_jct=...`，填了显著降低风控概率；面板只显示「已设置/未设置」 |
 | `dynamic_interval_seconds` | 120 | 动态轮询间隔（60~3600） |
 | `live_interval_seconds` | 90 | 开播/下播轮询间隔（30~1800） |
-| `follower_interval_seconds` | 1800 | 粉丝数轮询间隔 |
 | `send_mode` | `auto` | `auto` 有图发图、`text` 纯文本、`image` 文本+原图、`card` 渲染卡片 |
-| `push_gap_seconds` | 3 | 两条提醒之间的最小间隔（旧版的「防屏蔽延迟」） |
-| `max_events_per_cycle` | 6 | 单轮最多推送条数，超出跳过并记日志 |
-| `at_all` | false | 新订阅默认 @全体 |
-| `at_all_on_live_only` | true | @全体只用于开播提醒 |
-| `include_link` | true | 附带原文链接 |
-| `max_text_chars` | 180 | 正文截断长度 |
+| `include_link` | true | 附带「点击进入直播间」那行 |
 | `max_subscriptions` | 30 | 订阅上限 |
-| `proxy` | 空 | 请求代理 |
-| `qr_image_service` | qrserver | 扫码登录的二维码图片服务模板，`{data}` 替换为二维码内容；留空只发链接 |
 
 ## 提醒类别
 

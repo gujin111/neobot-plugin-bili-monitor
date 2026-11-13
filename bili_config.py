@@ -1,147 +1,83 @@
-"""插件配置模型：字段说明直接渲染成网页面板表单。
+"""插件配置模型：只有**面板上真正需要调**的几项，其余用代码内默认值。
 
-注意 ``cookie`` 这个名字命中宿主的敏感字段规则（cookie/token/password/...），
+面板字段越少越好：能自动判断的（发不发图、链接写法、帮助卡片形态）都由插件
+按宿主能力决定，不再让使用者去选。完整默认值见 :data:`DEFAULTS`，
+用 :func:`cfg` 读取（配置里没有这一项时自动回落到默认值）。
+
+``cookie`` 这个名字命中宿主的敏感字段规则（cookie/token/password/...），
 面板里只会显示「已设置 / 未设置」，不会回显明文。
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 SendMode = Literal["auto", "text", "image", "card"]
-MediaMode = Literal["auto", "always", "never"]
-HelpFormat = Literal["auto", "markdown", "image", "text"]
-LinkStyle = Literal["auto", "url", "markdown"]
+
+#: 不在面板上暴露、但代码要用的默认值（旧配置里即使还留着也不会报错）
+DEFAULTS: dict[str, Any] = {
+    "user_agent": "",
+    "proxy": "",
+    "request_timeout_seconds": 15,
+    "follower_interval_seconds": 1800,
+    "max_events_per_cycle": 6,
+    "push_gap_seconds": 3.0,
+    "at_all": False,
+    "at_all_on_live_only": True,
+    "max_text_chars": 180,
+    "media_mode": "auto",
+    "max_images": 2,
+    "help_format": "auto",
+    "link_style": "auto",
+    "help_image_theme": "default",
+    "help_image_width": 760,
+    "qr_image_service": "https://api.qrserver.com/v1/create-qr-code/?size=360x360&data={data}",
+    "event_retention_days": 7,
+}
+
+
+def cfg(config: Any, key: str) -> Any:
+    """读一个配置项：面板字段优先，否则用 :data:`DEFAULTS` 里的默认值。"""
+    value = getattr(config, key, None)
+    if value is None:
+        return DEFAULTS.get(key)
+    return value
 
 
 class BiliMonitorConfig(BaseModel):
-    """B 站监控助手配置。"""
+    """B 站监控助手配置（7 项，覆盖 95% 的使用场景）。"""
+
+    #: 允许旧配置里残留已删除的字段（面板不会显示，也不报错）
+    model_config = ConfigDict(extra="allow")
 
     command_prefix: str = Field(default="/", title="命令前缀")
 
-    # ---------------------------------------------------------------- 账号
     cookie: str = Field(
         default="",
         title="B 站登录 Cookie",
-        description="可选。填入 SESSDATA=...; bili_jct=... 可显著降低风控概率；留空则匿名访问。",
+        description="可选。填 SESSDATA=...; bili_jct=... 可显著降低风控概率；留空则匿名访问。",
         json_schema_extra={"single_line": True, "placeholder": "SESSDATA=xxx; bili_jct=yyy"},
     )
-    user_agent: str = Field(
-        default="",
-        title="自定义 User-Agent",
-        description="留空使用内置的 Chrome UA；一般不需要改。",
-        json_schema_extra={"single_line": True},
-    )
-    proxy: str = Field(
-        default="",
-        title="请求代理",
-        description="形如 http://127.0.0.1:7890；留空直连。",
-        json_schema_extra={"single_line": True},
-    )
-    request_timeout_seconds: int = Field(
-        default=15, title="请求超时（秒）", ge=5, le=120,
-    )
-
-    # ---------------------------------------------------------------- 轮询
     dynamic_interval_seconds: int = Field(
         default=120, title="动态轮询间隔（秒）",
-        description="每个 UP 主每隔这么久检查一次新动态。太小会更快触发风控，建议 90~300。",
+        description="每个 UP 主每隔这么久检查一次；太小容易触发风控，建议 90~300。",
         ge=60, le=3600,
     )
     live_interval_seconds: int = Field(
         default=90, title="直播轮询间隔（秒）",
-        description="检查开播/下播状态的间隔，建议 60~180。",
+        description="检查开播/下播的间隔，建议 60~180。",
         ge=30, le=1800,
     )
-    follower_interval_seconds: int = Field(
-        default=1800, title="粉丝数轮询间隔（秒）",
-        description="粉丝数变化慢，默认半小时一次即可。",
-        ge=300, le=86400,
+    send_mode: SendMode = Field(
+        default="auto", title="发送模式",
+        description="auto=有配图就发图、否则纯文本；text=只发文本；image=文本+原图；card=渲染卡片图。",
+    )
+    include_link: bool = Field(
+        default=True, title="附带原文链接",
+        description="关掉后提醒里不带「点击进入直播间」那行。",
     )
     max_subscriptions: int = Field(
         default=30, title="订阅上限", description="同时监控的 UP 主数量上限。", ge=1, le=200,
-    )
-
-    # ---------------------------------------------------------------- 推送
-    send_mode: SendMode = Field(
-        default="auto", title="默认发送模式",
-        description="auto=有配图就发图、否则纯文本；text=只发文本；image=文本+原图；card=渲染卡片图（依赖本体截图能力）。",
-    )
-    push_gap_seconds: float = Field(
-        default=3.0, title="推送间隔（秒）",
-        description="两条提醒之间的最小间隔，用于规避消息屏蔽。设为 0 表示不限速。",
-        ge=0, le=120,
-    )
-    max_events_per_cycle: int = Field(
-        default=6, title="单轮最多推送条数",
-        description="一次轮询里最多推送多少条新动态，超出的会跳过并记日志，避免刷屏。",
-        ge=1, le=20,
-    )
-    at_all: bool = Field(
-        default=False, title="默认 @全体成员",
-        description="新订阅默认开启 @全体；需要机器人有群管理员权限，否则发送会失败。",
-    )
-    at_all_on_live_only: bool = Field(
-        default=True, title="仅开播提醒 @全体",
-        description="开启后，@全体只作用于开播提醒，动态/下播提醒不带 @。",
-    )
-    include_link: bool = Field(default=True, title="附带原文链接")
-    media_mode: MediaMode = Field(
-        default="auto",
-        title="图片通道",
-        description=(
-            "auto=官方机器人通道自动不发图（避免「富媒体文件下载失败」），OneBot 正常发；"
-            "always=强制发图（仅当本体的文件服务公网可达时官方通道才能成功）；"
-            "never=一律不发图，只发文字。"
-        ),
-    )
-    max_images: int = Field(
-        default=2, title="每条约几张图", ge=0, le=9,
-        description="0 表示不发图；官方通道建议 1~2 张，多了容易触发上传限流。",
-    )
-    help_format: HelpFormat = Field(
-        default="auto",
-        title="命令速查的呈现方式",
-        description=(
-            "auto=官方机器人通道发 Markdown 卡片、其它通道发图片；"
-            "markdown=始终发 Markdown 卡片（不碰媒体上传）；"
-            "image=始终渲染成图片；text=始终发纯文本。"
-        ),
-    )
-    link_style: LinkStyle = Field(
-        default="auto",
-        title="链接写法",
-        description=(
-            "auto=官方通道用 Markdown 链接 `[点击进入直播间](链接)`，其它通道用裸链接；"
-            "url=始终裸链接；markdown=始终 Markdown 链接。"
-        ),
-    )
-    help_image_theme: str = Field(
-        default="default",
-        title="帮助卡片主题",
-        description="用本体内置卡片主题渲染命令速查图（与宿主 /help 同款），改主题名即可换配色。",
-        json_schema_extra={"single_line": True},
-    )
-    help_image_width: int = Field(
-        default=760, title="帮助卡片宽度", ge=480, le=1200,
-        description="渲染成图片时的宽度（像素）。",
-    )
-    max_text_chars: int = Field(
-        default=180, title="正文截断长度", description="动态正文超过这个长度会截断并加省略号。",
-        ge=40, le=1000,
-    )
-
-    # ---------------------------------------------------------------- 其它
-    qr_image_service: str = Field(
-        default="https://api.qrserver.com/v1/create-qr-code/?size=360x360&data={data}",
-        title="二维码图片服务",
-        description="扫码登录时把二维码内容转成图片的地址模板，{data} 会被替换成编码后的内容；留空则只发链接。",
-        json_schema_extra={"single_line": True},
-    )
-    event_retention_days: int = Field(
-        default=7, title="事件记录保留天数",
-        description="用于去重与排障的事件日志保留时长。",
-        ge=1, le=90,
     )

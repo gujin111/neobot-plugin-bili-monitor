@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.7 — 2026-11-13
+
+### 精简
+
+- **面板只留 7 项**（原来 21 项）：`command_prefix` / `cookie` /
+  `dynamic_interval_seconds` / `live_interval_seconds` / `send_mode` /
+  `include_link` / `max_subscriptions`
+- 其余参数（粉丝轮询间隔、推送节流、单轮上限、@全体默认、图片策略、
+  帮助卡片主题与宽度、链接写法、正文截断、代理、UA、二维码服务、事件保留天数）
+  改为 `bili_config.DEFAULTS` 里的代码默认值，通过 `cfg()` 读取；
+  旧配置里残留这些键也不会报错（`extra=allow`），只是面板不再显示
+
 ## 1.0.6 — 2026-11-13
 
 ### 修复

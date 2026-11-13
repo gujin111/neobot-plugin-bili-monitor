@@ -17,6 +17,7 @@ import time
 from typing import Any, Protocol
 
 from .bili_api import BiliApiError, BiliClient, BiliCooldownError, LiveRoomSnapshot
+from .bili_config import cfg
 from .bili_model import (
     DYNAMIC_KINDS,
     MonitorEvent,
@@ -116,7 +117,7 @@ class MonitorEngine:
         interval = {
             "dynamic": self._config.dynamic_interval_seconds,
             "live": self._config.live_interval_seconds,
-            "follower": self._config.follower_interval_seconds,
+            "follower": cfg(self._config, "follower_interval_seconds"),
         }[kind]
         # 每 15 秒唤醒一次，按各订阅自己的到期时间派发，避免同一刻并发打满
         step = max(5.0, min(15.0, interval / 4))
@@ -184,11 +185,11 @@ class MonitorEngine:
         fresh.sort(key=dynamic_id)
         events: list[MonitorEvent] = []
         for item in fresh:
-            event = parse_dynamic_item(item, text_limit=self._config.max_text_chars)
+            event = parse_dynamic_item(item, text_limit=cfg(self._config, "max_text_chars"))
             if event is not None:
                 events.append(event)
 
-        limit = max(1, int(self._config.max_events_per_cycle))
+        limit = max(1, int(cfg(self._config, "max_events_per_cycle")))
         if len(events) > limit:
             dropped = len(events) - limit
             events = events[-limit:]
@@ -293,7 +294,7 @@ class MonitorEngine:
     async def _follower_tick(self) -> None:
         if self._skip_for_cooldown():
             return
-        subs = await self._due_subscriptions("follower", self._config.follower_interval_seconds)
+        subs = await self._due_subscriptions("follower", cfg(self._config, "follower_interval_seconds"))
         for sub in subs:
             if "follower" not in sub.category_set:
                 continue
@@ -386,7 +387,7 @@ class MonitorEngine:
     async def _send(self, sub: Subscription, event: MonitorEvent, kind: str, target_id: str,
                     custom: dict[str, str], *, proactive: bool = True) -> bool:
         at_all = bool(sub.at_all) and (
-            not self._config.at_all_on_live_only or event.kind == "live_on"
+            not cfg(self._config, "at_all_on_live_only") or event.kind == "live_on"
         )
         mode = (sub.send_mode or self._config.send_mode or "auto").strip().lower()
         if mode == "auto":
@@ -496,7 +497,7 @@ class MonitorEngine:
 
     async def _gate(self) -> None:
         """全局推送节流（旧版「防屏蔽延迟」）。"""
-        gap = float(self._config.push_gap_seconds or 0)
+        gap = float(cfg(self._config, "push_gap_seconds") or 0)
         if gap <= 0:
             return
         async with self._gate_lock:

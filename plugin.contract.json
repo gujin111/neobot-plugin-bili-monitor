@@ -1,27 +1,16 @@
 {
   "actions": [],
   "config": {
-    "description": "B 站监控助手配置。",
+    "additionalProperties": true,
+    "description": "B 站监控助手配置（7 项，覆盖 95% 的使用场景）。",
     "properties": {
-      "at_all": {
-        "default": false,
-        "description": "新订阅默认开启 @全体；需要机器人有群管理员权限，否则发送会失败。",
-        "title": "默认 @全体成员",
-        "type": "boolean"
-      },
-      "at_all_on_live_only": {
-        "default": true,
-        "description": "开启后，@全体只作用于开播提醒，动态/下播提醒不带 @。",
-        "title": "仅开播提醒 @全体",
-        "type": "boolean"
-      },
       "command_prefix": {
         "default": "/",
         "title": "命令前缀",
         "type": "string"
       },
       "cookie": {
-        "description": "可选。填入 SESSDATA=...; bili_jct=... 可显著降低风控概率；留空则匿名访问。",
+        "description": "可选。填 SESSDATA=...; bili_jct=... 可显著降低风控概率；留空则匿名访问。",
         "placeholder": "SESSDATA=xxx; bili_jct=yyy",
         "single_line": true,
         "title": "B 站登录 Cookie",
@@ -30,93 +19,24 @@
       },
       "dynamic_interval_seconds": {
         "default": 120,
-        "description": "每个 UP 主每隔这么久检查一次新动态。太小会更快触发风控，建议 90~300。",
+        "description": "每个 UP 主每隔这么久检查一次；太小容易触发风控，建议 90~300。",
         "maximum": 3600,
         "minimum": 60,
         "title": "动态轮询间隔（秒）",
         "type": "integer"
       },
-      "event_retention_days": {
-        "default": 7,
-        "description": "用于去重与排障的事件日志保留时长。",
-        "maximum": 90,
-        "minimum": 1,
-        "title": "事件记录保留天数",
-        "type": "integer"
-      },
-      "follower_interval_seconds": {
-        "default": 1800,
-        "description": "粉丝数变化慢，默认半小时一次即可。",
-        "maximum": 86400,
-        "minimum": 300,
-        "title": "粉丝数轮询间隔（秒）",
-        "type": "integer"
-      },
-      "help_format": {
-        "default": "auto",
-        "description": "auto=官方机器人通道发 Markdown 卡片、其它通道发图片；markdown=始终发 Markdown 卡片（不碰媒体上传）；image=始终渲染成图片；text=始终发纯文本。",
-        "enum": [
-          "auto",
-          "markdown",
-          "image",
-          "text"
-        ],
-        "title": "命令速查的呈现方式",
-        "type": "string"
-      },
-      "help_image_theme": {
-        "default": "default",
-        "description": "用本体内置卡片主题渲染命令速查图（与宿主 /help 同款），改主题名即可换配色。",
-        "single_line": true,
-        "title": "帮助卡片主题",
-        "type": "string"
-      },
-      "help_image_width": {
-        "default": 760,
-        "description": "渲染成图片时的宽度（像素）。",
-        "maximum": 1200,
-        "minimum": 480,
-        "title": "帮助卡片宽度",
-        "type": "integer"
-      },
       "include_link": {
         "default": true,
+        "description": "关掉后提醒里不带「点击进入直播间」那行。",
         "title": "附带原文链接",
         "type": "boolean"
       },
-      "link_style": {
-        "default": "auto",
-        "description": "auto=官方通道用 Markdown 链接 `[点击进入直播间](链接)`，其它通道用裸链接；url=始终裸链接；markdown=始终 Markdown 链接。",
-        "enum": [
-          "auto",
-          "url",
-          "markdown"
-        ],
-        "title": "链接写法",
-        "type": "string"
-      },
       "live_interval_seconds": {
         "default": 90,
-        "description": "检查开播/下播状态的间隔，建议 60~180。",
+        "description": "检查开播/下播的间隔，建议 60~180。",
         "maximum": 1800,
         "minimum": 30,
         "title": "直播轮询间隔（秒）",
-        "type": "integer"
-      },
-      "max_events_per_cycle": {
-        "default": 6,
-        "description": "一次轮询里最多推送多少条新动态，超出的会跳过并记日志，避免刷屏。",
-        "maximum": 20,
-        "minimum": 1,
-        "title": "单轮最多推送条数",
-        "type": "integer"
-      },
-      "max_images": {
-        "default": 2,
-        "description": "0 表示不发图；官方通道建议 1~2 张，多了容易触发上传限流。",
-        "maximum": 9,
-        "minimum": 0,
-        "title": "每条约几张图",
         "type": "integer"
       },
       "max_subscriptions": {
@@ -127,71 +47,16 @@
         "title": "订阅上限",
         "type": "integer"
       },
-      "max_text_chars": {
-        "default": 180,
-        "description": "动态正文超过这个长度会截断并加省略号。",
-        "maximum": 1000,
-        "minimum": 40,
-        "title": "正文截断长度",
-        "type": "integer"
-      },
-      "media_mode": {
-        "default": "auto",
-        "description": "auto=官方机器人通道自动不发图（避免「富媒体文件下载失败」），OneBot 正常发；always=强制发图（仅当本体的文件服务公网可达时官方通道才能成功）；never=一律不发图，只发文字。",
-        "enum": [
-          "auto",
-          "always",
-          "never"
-        ],
-        "title": "图片通道",
-        "type": "string"
-      },
-      "proxy": {
-        "default": "",
-        "description": "形如 http://127.0.0.1:7890；留空直连。",
-        "single_line": true,
-        "title": "请求代理",
-        "type": "string"
-      },
-      "push_gap_seconds": {
-        "default": 3.0,
-        "description": "两条提醒之间的最小间隔，用于规避消息屏蔽。设为 0 表示不限速。",
-        "maximum": 120,
-        "minimum": 0,
-        "title": "推送间隔（秒）",
-        "type": "number"
-      },
-      "qr_image_service": {
-        "default": "https://api.qrserver.com/v1/create-qr-code/?size=360x360&data={data}",
-        "description": "扫码登录时把二维码内容转成图片的地址模板，{data} 会被替换成编码后的内容；留空则只发链接。",
-        "single_line": true,
-        "title": "二维码图片服务",
-        "type": "string"
-      },
-      "request_timeout_seconds": {
-        "default": 15,
-        "maximum": 120,
-        "minimum": 5,
-        "title": "请求超时（秒）",
-        "type": "integer"
-      },
       "send_mode": {
         "default": "auto",
-        "description": "auto=有配图就发图、否则纯文本；text=只发文本；image=文本+原图；card=渲染卡片图（依赖本体截图能力）。",
+        "description": "auto=有配图就发图、否则纯文本；text=只发文本；image=文本+原图；card=渲染卡片图。",
         "enum": [
           "auto",
           "text",
           "image",
           "card"
         ],
-        "title": "默认发送模式",
-        "type": "string"
-      },
-      "user_agent": {
-        "default": "",
-        "description": "留空使用内置的 Chrome UA；一般不需要改。",
-        "single_line": true,
-        "title": "自定义 User-Agent",
+        "title": "发送模式",
         "type": "string"
       }
     },
@@ -265,7 +130,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.6"
+    "version": "1.0.7"
   },
   "resources": [],
   "schema_version": 1

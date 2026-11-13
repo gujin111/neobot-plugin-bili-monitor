@@ -22,7 +22,7 @@ from typing import Any
 from neobot_modloader import Migration, MessageChain, Plugin, Reply
 
 from .bili_api import BiliApiError, BiliClient, BiliCooldownError, UpProfile
-from .bili_config import BiliMonitorConfig
+from .bili_config import BiliMonitorConfig, cfg
 from .bili_engine import MonitorEngine
 from .bili_model import (
     DYNAMIC_KINDS,
@@ -56,7 +56,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -342,7 +342,7 @@ async def _diagnose_help(runtime: _Runtime, command_ctx: Any) -> str:
     lines = [
         "帮助图链路诊断",
         f"通道：{runtime.sender.channel or '未知（按非官方处理）'}",
-        f"help_format：{runtime.config.help_format}",
+        f"help_format：{cfg(runtime.config, 'help_format')}",
     ]
     try:
         from neobot_app.runtime.html_card import render_card_html, render_card_image
@@ -520,7 +520,7 @@ async def _admin_add(runtime: _Runtime, command_ctx: Any, args: list[str]) -> st
         face=profile.face,
         room_id=room_id,
         created_by=str(getattr(command_ctx, "user_id", "") or ""),
-        at_all=bool(runtime.config.at_all),
+        at_all=bool(cfg(runtime.config, "at_all")),
     )
     target_kind, target_id = target_from_context(command_ctx)
     if target_id:
@@ -899,7 +899,7 @@ async def _status_text(runtime: _Runtime) -> str:
         f"订阅：{len(subs)} 个（启用 {len(enabled)} 个）",
         f"轮询：动态 {runtime.config.dynamic_interval_seconds}s / "
         f"直播 {runtime.config.live_interval_seconds}s / "
-        f"粉丝 {runtime.config.follower_interval_seconds}s",
+        f"粉丝 {cfg(runtime.config, 'follower_interval_seconds')}s",
         f"本轮统计：检查 {stats.get('cycles', 0)} 轮，事件 {stats.get('events', 0)} 条，"
         f"成功推送 {stats.get('pushed', 0)} 次，失败 {stats.get('failed', 0)} 次",
         f"最近推送：{last_push_text}",
@@ -918,7 +918,7 @@ async def _status_text(runtime: _Runtime) -> str:
 # ---------------------------------------------------------------- 扫码登录
 async def _start_qr_login(runtime: _Runtime, command_ctx: Any) -> str:
     try:
-        session, image_url = await runtime.api.qr_generate(runtime.config.qr_image_service)
+        session, image_url = await runtime.api.qr_generate(cfg(runtime.config, "qr_image_service"))
     except BiliCooldownError as exc:
         return f"B 站风控冷却中，还需 {exc.retry_after:.0f} 秒，稍后再试。"
     except BiliApiError as exc:
@@ -988,9 +988,9 @@ async def _on_load(ctx: Any) -> None:
 
     api = BiliClient(
         cookie=config.cookie,
-        user_agent=config.user_agent,
-        proxy=config.proxy,
-        timeout=float(config.request_timeout_seconds),
+        user_agent=cfg(config, "user_agent"),
+        proxy=cfg(config, "proxy"),
+        timeout=float(cfg(config, "request_timeout_seconds")),
         logger=ctx.logger,
         cookie_provider=lambda: asyncio.sleep(0, result=_load_cookie()),
         cookie_saver=lambda raw: asyncio.sleep(0, result=_save_cookie(raw)),
@@ -1035,7 +1035,7 @@ async def _on_startup(ctx: Any) -> None:
     if runtime is None:
         return
     try:
-        await runtime.store.prune_events(runtime.config.event_retention_days)
+        await runtime.store.prune_events(cfg(runtime.config, "event_retention_days"))
     except Exception as exc:  # noqa: BLE001 - 清理失败不影响启动
         ctx.logger.warning(f"清理历史事件失败：{exc}")
     await runtime.engine.start()
@@ -1046,7 +1046,7 @@ async def _daily_maintenance(runtime: _Runtime) -> None:
     while True:
         await asyncio.sleep(24 * 3600)
         try:
-            await runtime.store.prune_events(runtime.config.event_retention_days)
+            await runtime.store.prune_events(cfg(runtime.config, "event_retention_days"))
         except Exception as exc:  # noqa: BLE001
             _log("warning", f"定时清理事件失败：{exc}")
 
