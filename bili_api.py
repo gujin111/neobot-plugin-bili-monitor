@@ -166,6 +166,7 @@ class BiliClient:
         logger: Any = None,
         cookie_provider: Any = None,
         cookie_saver: Any = None,
+        min_request_interval: float | None = None,
     ) -> None:
         self._logger = logger
         self._timeout = max(3.0, float(timeout))
@@ -185,8 +186,9 @@ class BiliClient:
         self._risk_strikes = 0
         self._log_cache: dict[str, float] = {}
         self._last_request = 0.0
-        # 匿名访问时请求太密很容易触发风控：默认请求间隔放到 0.6 秒
-        self._min_interval = 0.6
+        # 匿名访问时请求太密很容易触发风控：默认请求间隔 0.6 秒；
+        # 直播开播快检（≤5 秒档）会调到 0.25 秒，同样受风控冷却保护
+        self._min_interval = max(0.2, float(min_request_interval)) if min_request_interval else 0.6
         self.stats = {"requests": 0, "errors": 0, "risk": 0}
 
     # ---------------------------------------------------------------- 生命周期

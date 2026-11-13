@@ -1,5 +1,5 @@
 name = "bili_monitor"
-version = "1.0.9"
+version = "1.1.0"
 description = "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）"
 author = "bili_monitor contributors"
 license = "MIT"

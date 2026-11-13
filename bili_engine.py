@@ -120,8 +120,8 @@ class MonitorEngine:
             "live": self._config.live_interval_seconds,
             "follower": cfg(self._config, "follower_interval_seconds"),
         }[kind]
-        # 每 15 秒唤醒一次，按各订阅自己的到期时间派发，避免同一刻并发打满
-        step = max(5.0, min(15.0, interval / 4))
+        # 唤醒粒度跟着间隔走：3 秒档必须按秒醒，否则会被 5 秒的调度粒度吃掉
+        step = max(1.0, min(15.0, interval / 3))
         while self._running:
             started = time.monotonic()
             try:
@@ -133,12 +133,14 @@ class MonitorEngine:
                 self._log("error", f"B 站 {kind} 轮询异常：{exc}")
             self.stats["cycles"] += 1
             elapsed = time.monotonic() - started
-            await asyncio.sleep(max(1.0, step - elapsed))
+            await asyncio.sleep(max(0.5, step - elapsed))
 
     async def _due_subscriptions(self, kind: str, interval: float) -> list[Subscription]:
         subs = await self._store.list_subscriptions(only_enabled=True)
         now = time.monotonic()
         due: list[Subscription] = []
+        # 快速档（≤10 秒）抖动收窄，否则 3 秒会被抖成 3.5 秒
+        low, high = (1.0, 1.02) if interval <= 10 else (0.9, 1.15)
         for sub in subs:
             key = (sub.id, kind)
             threshold = self._due.get(key, 0.0)
@@ -151,7 +153,7 @@ class MonitorEngine:
                 threshold = max(threshold, now)
                 self._due[key] = threshold + backoff
             else:
-                self._due[key] = now + interval * random.uniform(0.9, 1.15)
+                self._due[key] = now + interval * random.uniform(low, high)
             due.append(sub)
         return due
 

@@ -563,6 +563,26 @@ async def test_media_failure_blocks_following_images(engine_mod, store_mod):
     assert len(getattr(api, "downloaded", [])) == downloaded_before, "熔断后不再下载图片"
 
 
+async def test_due_subscriptions_tight_jitter_in_fast_mode(engine_mod, store_mod, monkeypatch):
+    store, api, sender = FakeStore(), FakeApi(), FakeSender()
+    store.subs = [make_sub(store_mod)]
+    engine = build_engine(engine_mod, store, api, sender, make_config())
+    captured = {}
+
+    def fake_uniform(low, high):
+        captured["args"] = (low, high)
+        return 1.0
+
+    monkeypatch.setattr(engine_mod.random, "uniform", fake_uniform)
+
+    await engine._due_subscriptions("live", 3)
+    assert captured["args"] == (1.0, 1.02), "3 秒档不能被抖动拉长"
+
+    engine._due.clear()
+    await engine._due_subscriptions("live", 90)
+    assert captured["args"] == (0.9, 1.15)
+
+
 def _event_from(engine_mod, api):
     from bili_monitor.bili_model import parse_dynamic_item
 

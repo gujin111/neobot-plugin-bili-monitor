@@ -33,9 +33,9 @@
       },
       "live_interval_seconds": {
         "default": 90,
-        "description": "检查开播/下播的间隔，建议 60~180。",
+        "description": "检查开播/下播的间隔。填 3 可做到开播 3 秒内推送，但请求量是 90 秒档的 30 倍：建议同时填 Cookie，并把订阅数控制在个位数，否则容易触发风控。",
         "maximum": 1800,
-        "minimum": 30,
+        "minimum": 3,
         "title": "直播轮询间隔（秒）",
         "type": "integer"
       },
@@ -186,7 +186,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.9"
+    "version": "1.1.0"
   },
   "resources": [],
   "schema_version": 1

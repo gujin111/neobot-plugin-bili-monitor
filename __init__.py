@@ -56,7 +56,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.9"
+VERSION = "1.1.0"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -986,6 +986,8 @@ async def _on_load(ctx: Any) -> None:
         if runtime is not None:
             runtime.save_cookie(raw)
 
+    # 直播快检（≤5 秒档）时把请求间隔压到 0.25 秒，否则 3 秒一轮会被限速拖长
+    fast_live = int(config.live_interval_seconds) <= 5
     api = BiliClient(
         cookie=config.cookie,
         user_agent=cfg(config, "user_agent"),
@@ -994,6 +996,7 @@ async def _on_load(ctx: Any) -> None:
         logger=ctx.logger,
         cookie_provider=lambda: asyncio.sleep(0, result=_load_cookie()),
         cookie_saver=lambda raw: asyncio.sleep(0, result=_save_cookie(raw)),
+        min_request_interval=0.25 if fast_live else None,
     )
     sender = HostSender(ctx, ctx.logger)
     cards = HtmlCardRenderer(ctx, ctx.logger)
@@ -1020,6 +1023,14 @@ async def _on_load(ctx: Any) -> None:
         f"B 站监控插件已加载：{sub_count} 个订阅，登录态={'有' if api.has_login else '无'}，"
         f"通道={sender.channel or '未知'}"
     )
+    if fast_live:
+        per_minute = int(60 / max(1, int(config.live_interval_seconds)))
+        ctx.logger.warning(
+            f"直播快检已开启：每 {config.live_interval_seconds} 秒查一次"
+            f"（每个订阅约 {per_minute} 次/分钟）。"
+            + ("" if api.has_login else "当前未登录 B 站，建议填 Cookie 或扫码登录，否则很容易被风控。")
+            + ("订阅数较多时请适当调大间隔。" if sub_count > 5 else "")
+        )
     if sub_count and not cards.available:
         ctx.logger.info("本体截图能力不可用，card 模式会自动降级为文本 + 原图")
 

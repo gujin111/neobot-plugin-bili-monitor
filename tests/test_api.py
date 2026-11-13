@@ -205,3 +205,9 @@ async def test_resolve_profile_stops_at_cooldown(api, monkeypatch):
     with pytest.raises(api.BiliCooldownError):
         await client.resolve_profile(546195)
     assert called == ["account"]        # 冷却后不再换接口重试
+
+
+def test_client_min_request_interval(api):
+    assert api.BiliClient()._min_interval == 0.6
+    assert api.BiliClient(min_request_interval=0.25)._min_interval == 0.25
+    assert api.BiliClient(min_request_interval=0.01)._min_interval >= 0.2

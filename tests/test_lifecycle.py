@@ -496,3 +496,16 @@ async def test_diag_command_reports_chain(loaded_plugin, monkeypatch):
     assert "渲染：成功" in text
     assert "命令服务发图：可用" in text
     await pkg.plugin.on_stop()
+
+
+def test_live_interval_accepts_three_seconds(pkg):
+    cfg = pkg.BiliMonitorConfig(live_interval_seconds=3)
+    assert cfg.live_interval_seconds == 3
+
+
+def test_live_interval_rejects_below_three(pkg):
+    import pydantic
+    import pytest as _pytest
+
+    with _pytest.raises(pydantic.ValidationError):
+        pkg.BiliMonitorConfig(live_interval_seconds=2)

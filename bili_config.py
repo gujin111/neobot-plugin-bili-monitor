@@ -67,8 +67,11 @@ class BiliMonitorConfig(BaseModel):
     )
     live_interval_seconds: int = Field(
         default=90, title="直播轮询间隔（秒）",
-        description="检查开播/下播的间隔，建议 60~180。",
-        ge=30, le=1800,
+        description=(
+            "检查开播/下播的间隔。填 3 可做到开播 3 秒内推送，但请求量是 90 秒档的 30 倍："
+            "建议同时填 Cookie，并把订阅数控制在个位数，否则容易触发风控。"
+        ),
+        ge=3, le=1800,
     )
     send_mode: SendMode = Field(
         default="auto", title="发送模式",
