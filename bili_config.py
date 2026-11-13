@@ -118,6 +118,16 @@ class BiliMonitorConfig(BaseModel):
             "url=始终裸链接；markdown=始终 Markdown 链接。"
         ),
     )
+    help_image_theme: str = Field(
+        default="default",
+        title="帮助卡片主题",
+        description="用本体内置卡片主题渲染命令速查图（与宿主 /help 同款），改主题名即可换配色。",
+        json_schema_extra={"single_line": True},
+    )
+    help_image_width: int = Field(
+        default=760, title="帮助卡片宽度", ge=480, le=1200,
+        description="渲染成图片时的宽度（像素）。",
+    )
     max_text_chars: int = Field(
         default=180, title="正文截断长度", description="动态正文超过这个长度会截断并加省略号。",
         ge=40, le=1000,

@@ -180,24 +180,23 @@ def test_summary_line(render, model):
     assert "老番茄" in render.summary_line(event)
 
 
-# ---------------------------------------------------------------- 命令速查图
-def test_help_html_contains_every_command(render):
-    import html as html_lib
+# ---------------------------------------------------------------- 命令速查卡片
+def test_help_blocks_follow_host_card_dsl(render):
+    """区块直接交给本体内置 render_card_html（heading / rows / note）。"""
+    blocks = render.help_blocks(version="9.9.9")
+    kinds = [block["kind"] for block in blocks]
+    assert kinds[0] == "heading"
+    assert kinds[-1] == "note"
+    assert "9.9.9" in blocks[-1]["text"]
 
-    html = render.help_html(version="9.9.9")
-    for _title, _color, items in render.HELP_GROUPS:
-        for syntax, desc in items:
-            assert html_lib.escape(syntax) in html
-            assert html_lib.escape(desc) in html
-    assert "v9.9.9" in html
-    assert "<script" not in html.lower()
+    rows = [block for block in blocks if block["kind"] == "rows"]
+    assert len(rows) == len(render.HELP_GROUPS)
+    for block, (_title, _color, items) in zip(rows, render.HELP_GROUPS):
+        assert block["columns"] == ["命令", "作用"]
+        assert [list(row) for row in block["rows"]] == [[s, d] for s, d in items]
 
-
-def test_help_html_escapes_command_text(render):
-    html = render.help_html()
-    # `|` 之类不算特殊字符，但尖括号必须转义（命令里有 <uid>）
-    assert "&lt;uid" in html
-    assert "<uid" not in html.split("<body")[1]
+    for block in blocks:
+        assert set(block) <= {"kind", "text", "columns", "widths", "rows"}
 
 
 def test_help_text_lists_all_groups(render):

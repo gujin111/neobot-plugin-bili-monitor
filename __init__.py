@@ -37,13 +37,12 @@ from .bili_notify import (
     HostSender,
     HtmlCardRenderer,
     conversation_for,
-    media_allowed,
     target_from_context,
 )
 from .bili_render import (
     DEFAULT_TEMPLATES,
     describe_template_fields,
-    help_html,
+    help_blocks,
     help_markdown,
     help_text,
     render_text,
@@ -57,7 +56,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 plugin = Plugin(
     PLUGIN_NAME,
@@ -256,43 +255,84 @@ def _help_text() -> str:
     return help_text()
 
 
-async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
-    """命令速查：官方通道发 Markdown 卡片，其它通道发图片，失败回退文本。
+async def _render_help_image(runtime: _Runtime) -> bytes | None:
+    """用**本体内置的卡片渲染**生成帮助图（与宿主 /help 同一套主题和字体）。
 
-    官方机器人通道的富媒体要让 QQ 按 URL 去拉文件，本体的图片在本地文件服务里，
-    QQ 拉不到会报「富媒体文件下载失败」；而官方协议本身支持 markdown（msg_type=2），
-    所以这类通道直接用 Markdown 排版，既好看又完全不碰媒体上传。
+    渲染链路不可用（没装前端/没开浏览器/超时）时返回 None，由调用方回退文字。
     """
-    fmt = str(getattr(runtime.config, "help_format", "auto") or "auto").lower()
-    if fmt == "auto":
-        # 官方通道（或图片通道已熔断）走 Markdown，不碰媒体上传
-        use_markdown = runtime.sender.channel == OFFICIAL or not media_allowed(
-            runtime.config, runtime.sender
+    try:
+        from neobot_app.runtime.html_card import render_card_html, render_card_image
+    except Exception as exc:  # noqa: BLE001 - 非本体环境（或版本过老）
+        _log("warning", f"无法导入本体卡片渲染模块：{type(exc).__name__}: {exc}")
+        return None
+    try:
+        html = render_card_html(
+            title="B 站监控助手 · 命令速查",
+            subtitle=f"bili_monitor {VERSION} · 群里先 @机器人，命令前缀默认 /",
+            blocks=help_blocks(version=VERSION),
+            footer="官方通道发 Markdown 卡片；OneBot 通道发本图",
+            theme=str(getattr(runtime.config, "help_image_theme", "default") or "default"),
+            width=int(getattr(runtime.config, "help_image_width", 760) or 760),
         )
-        fmt = "markdown" if use_markdown else "image"
+    except Exception as exc:  # noqa: BLE001 - 主题名非法等
+        _log("warning", f"帮助卡片 HTML 生成失败：{type(exc).__name__}: {exc}")
+        return None
+    try:
+        return await render_card_image(
+            html, timeout=25.0, screenshots=getattr(runtime.ctx, "screenshots", None)
+        )
+    except Exception as exc:  # noqa: BLE001 - 渲染失败一律回退
+        _log("warning", f"帮助卡片渲染失败：{type(exc).__name__}: {exc}")
+        return None
+
+
+async def _send_help_image(runtime: _Runtime, command_ctx: Any, png: bytes) -> bool:
+    """发帮助图：优先走命令服务的 ``send_image_bytes``（与宿主 /help 同一条路）。"""
+    service = getattr(command_ctx, "service", None)
+    kind = str(getattr(command_ctx, "kind", "") or "")
+    conv_id = str(getattr(command_ctx, "conv_id", "") or "")
+    sender = getattr(service, "send_image_bytes", None)
+    if callable(sender) and kind and conv_id:
+        try:
+            if await sender(kind, conv_id, png, filename="bili-help.png"):
+                return True
+        except Exception as exc:  # noqa: BLE001 - 官方通道可能直接抛错，继续降级
+            _log("warning", f"命令服务发图失败：{type(exc).__name__}: {exc}")
+    # 退回插件自己的发送路径
+    target_kind, ident = target_from_context(command_ctx)
+    if not ident:
+        return False
+    try:
+        await runtime.ctx.send_image(
+            conversation_for(runtime.ctx, target_kind, ident),
+            data=png,
+            filename="bili-help.png",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - 发图失败退回文本
+        runtime.sender.media_blocked = True
+        _log("warning", f"帮助图片发送失败，之后只发文字：{type(exc).__name__}: {exc}")
+        return False
+
+
+async def _send_help(runtime: _Runtime, command_ctx: Any) -> str | None:
+    """命令速查：默认发本体渲染的卡片图，渲染/发送失败再回退 Markdown 或文字。"""
+    fmt = str(getattr(runtime.config, "help_format", "auto") or "auto").lower()
     if fmt == "text":
         return help_text()
     if fmt == "markdown":
         return help_markdown(version=VERSION)
-    if not media_allowed(runtime.config, runtime.sender):
-        return help_text()
-    image = await runtime.cards.render_html(
-        help_html(version=VERSION), width=760, height=1200
-    )
-    if image:
-        kind, ident = target_from_context(command_ctx)
-        if ident:
-            try:
-                await runtime.ctx.send_image(
-                    conversation_for(runtime.ctx, kind, ident),
-                    data=image,
-                    filename="bili-help.png",
-                )
-                return None  # 已经把图发出去了，宿主不用再发文本
-            except Exception as exc:  # noqa: BLE001 - 发图失败退回文本
-                # 失败一次就把这个进程里的图片通道关掉，避免每次都要撞一次
-                runtime.sender.media_blocked = True
-                _log("warning", f"命令速查图片发送失败，之后只发文本：{exc}")
+    if fmt == "auto" and runtime.sender.channel == OFFICIAL:
+        # 官方通道的富媒体要靠 QQ 拉公网文件，默认直接给 Markdown，不撞媒体上传
+        return help_markdown(version=VERSION)
+
+    png = await _render_help_image(runtime)
+    if png and await _send_help_image(runtime, command_ctx, png):
+        return None  # 图已经发出去了，宿主不用再发文本
+
+    # 回退：官方通道优先 Markdown（可点、不依赖图片），其它通道给纯文本表
+    if runtime.sender.channel == OFFICIAL:
+        return help_markdown(version=VERSION)
     return help_text()
 
 

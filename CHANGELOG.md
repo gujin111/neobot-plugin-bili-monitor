@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.5 — 2026-11-13
+
+### 重构
+
+- 帮助图改用**本体内置卡片渲染**（与宿主 /help 同一套主题与字体）：
+  - 生成：`neobot_app.runtime.html_card.render_card_html` + `render_card_image`，
+    插件不再自带一整张 HTML/CSS
+  - 发送：优先走命令服务的 `send_image_bytes`（与宿主 /help 同一条路），
+    失败再退回 `ctx.send_image`，最后回退 Markdown / 纯文本
+  - 新版配置 `help_image_theme` / `help_image_width`，主题跟随本体
+- 删除插件自绘的 `help_html()`（约 50 行 CSS）与相关测试，
+  命令数据仍集中在 `HELP_GROUPS`，文字 / Markdown / 卡片三态共用一份
+
 ## 1.0.4 — 2026-11-13
 
 ### 兼容

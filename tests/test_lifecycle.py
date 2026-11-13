@@ -230,12 +230,14 @@ async def test_validate_template(pkg):
 
 # ---------------------------------------------------------------- 推送目标映射
 class _Ctx:
-    def __init__(self, raw_args, *, kind="group", conv_id="123456", user_id=10001, message=None):
+    def __init__(self, raw_args, *, kind="group", conv_id="123456", user_id=10001, message=None,
+                 service=None):
         self.raw_args = raw_args
         self.kind = kind
         self.conv_id = conv_id
         self.user_id = user_id
         self.args = raw_args.split()
+        self.service = service
         if message is not None:
             self.message = message
 
@@ -326,80 +328,120 @@ async def test_unpush_removes_target(loaded_plugin, monkeypatch):
     await pkg.plugin.on_stop()
 
 
-# ---------------------------------------------------------------- 命令速查图
-async def test_help_sends_image_when_renderer_available(loaded_plugin, monkeypatch):
+# ---------------------------------------------------------------- 命令速查卡片
+def _install_fake_card_module(monkeypatch, *, png=b"\\x89PNG-fake", fail=False):
+    """注入一个假的 neobot_app.runtime.html_card，模拟本体内置卡片渲染。"""
+    import sys, types
+
+    pkg = types.ModuleType("neobot_app"); pkg.__path__ = []
+    runtime_pkg = types.ModuleType("neobot_app.runtime"); runtime_pkg.__path__ = []
+    card = types.ModuleType("neobot_app.runtime.html_card")
+    card.seen = {}
+
+    def render_card_html(**kwargs):
+        card.seen.update(kwargs)
+        return "<html><body>card</body></html>"
+
+    async def render_card_image(html, **kwargs):
+        if fail:
+            raise RuntimeError("screenshot unavailable")
+        return png
+
+    card.render_card_html = render_card_html
+    card.render_card_image = render_card_image
+    monkeypatch.setitem(sys.modules, "neobot_app", pkg)
+    monkeypatch.setitem(sys.modules, "neobot_app.runtime", runtime_pkg)
+    monkeypatch.setitem(sys.modules, "neobot_app.runtime.html_card", card)
+    return card
+
+
+class _SvcCtx(_Ctx):
+    def __init__(self, raw_args, service, **kwargs):
+        super().__init__(raw_args, **kwargs)
+        self.service = service
+
+
+class _ImageService:
+    def __init__(self, result=True):
+        self.result = result
+        self.calls = []
+
+    async def send_image_bytes(self, kind, conv_id, data, *, filename=None):
+        self.calls.append((kind, conv_id, data, filename))
+        return self.result
+
+
+async def test_help_sends_host_rendered_card(loaded_plugin, monkeypatch):
+    """帮助图走本体 render_card_html + 命令服务 send_image_bytes（与宿主 /help 同路）。"""
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
-    calls: list[tuple] = []
+    card = _install_fake_card_module(monkeypatch)
+    service = _ImageService()
 
-    async def fake_render(html, **kwargs):
-        calls.append(("render", "<!DOCTYPE html>" in html, len(html)))
-        return b"\x89PNG-fake"
+    result = await registry.commands["b站监控"].handler(_Ctx("help", service=service))
 
-    async def fake_send_image(conversation, *, data, filename):
-        calls.append(("image", conversation.kind, conversation.id, filename, len(data)))
-        return None
-
-    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
-    monkeypatch.setattr(runtime.ctx, "send_image", fake_send_image)
-
-    result = await registry.commands["b站监控"].handler(_Ctx("help"))
-
-    assert result is None, "发图后应返回 None，避免宿主再发一遍文本"
-    assert calls[0][0] == "render" and calls[0][1] is True
-    assert calls[1] == ("image", "group", "123456", "bili-help.png", len(b"\x89PNG-fake"))
+    assert result is None, "发图后应返回 None，宿主不再补文本"
+    assert card.seen["title"] == "B 站监控助手 · 命令速查"
+    assert card.seen["blocks"][0]["kind"] == "heading"
+    assert service.calls and service.calls[0][2] == b"\\x89PNG-fake"
+    assert service.calls[0][3] == "bili-help.png"
     await pkg.plugin.on_stop()
 
 
-async def test_help_falls_back_to_text(loaded_plugin, monkeypatch):
+async def test_help_falls_back_to_ctx_image_when_service_cannot(loaded_plugin, monkeypatch):
+    """send_image_bytes 返回 False（官方通道缺 file_server 等）时退回 ctx.send_image。"""
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    _install_fake_card_module(monkeypatch)
+    service = _ImageService(result=False)
+    sent = []
 
-    # 宿主没有截图能力时 render_html 返回 None
-    text = await registry.commands["b站监控"].handler(_Ctx("help"))
+    async def fake_send_image(conversation, *, data, filename, **kwargs):
+        sent.append((conversation.kind, filename))
 
-    assert isinstance(text, str)
-    assert "/b站管理" in text and "add <uid" in text
+    monkeypatch.setattr(runtime.ctx, "send_image", fake_send_image)
+
+    result = await registry.commands["b站监控"].handler(_Ctx("help", service=service))
+
+    assert result is None
+    assert sent == [("group", "bili-help.png")]
     await pkg.plugin.on_stop()
 
 
-async def test_admin_help_uses_image_too(loaded_plugin, monkeypatch):
+async def test_help_falls_back_to_text_when_render_fails(loaded_plugin, monkeypatch):
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
-    calls: list[str] = []
+    _install_fake_card_module(monkeypatch, fail=True)
 
-    async def fake_render(html, **kwargs):
-        calls.append("render")
-        return b"png"
+    result = await registry.commands["b站监控"].handler(_Ctx("help", service=_ImageService()))
 
-    async def fake_send_image(conversation, *, data, filename):
-        calls.append("image")
-        return None
+    assert isinstance(result, str)
+    assert "/b站管理" in result and "add <uid" in result
+    await pkg.plugin.on_stop()
 
-    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
-    monkeypatch.setattr(runtime.ctx, "send_image", fake_send_image)
 
-    assert await registry.commands["b站管理"].handler(_Ctx("help")) is None
-    assert calls == ["render", "image"]
+async def test_help_without_host_module_falls_back(loaded_plugin, monkeypatch):
+    """非本体环境（导入不到 html_card）时直接给文字，不抛错。"""
+    pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
+    import sys
+    monkeypatch.setitem(sys.modules, "neobot_app", None)
+
+    result = await registry.commands["b站管理"].handler(_Ctx("help", service=_ImageService()))
+
+    assert isinstance(result, str) and "/b站管理" in result
     await pkg.plugin.on_stop()
 
 
 async def test_help_on_official_channel_uses_markdown(loaded_plugin, monkeypatch):
-    """官方通道发图会卡在富媒体上传，改发 Markdown 卡片，连渲染都不做。"""
+    """官方通道默认直接发 Markdown，不渲染图片、不碰媒体上传。"""
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
     runtime.sender.channel = "official"
-    calls: list[str] = []
+    card = _install_fake_card_module(monkeypatch)
 
-    async def fake_render(html, **kwargs):
-        calls.append("render")
-        return b"png"
-
-    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
-
-    result = await registry.commands["b站管理"].handler(_Ctx(""))
+    result = await registry.commands["b站管理"].handler(_Ctx("", service=_ImageService()))
 
     assert isinstance(result, str)
     assert result.startswith("**B 站监控助手 · 命令速查**")
     assert "**所有人 · 查看**" in result
     assert "/b站管理 add <uid|链接> [直播间号] — 添加监控，推到当前会话" in result
-    assert calls == [], "Markdown 版不需要渲染图片"
+    assert card.seen == {}, "官方通道不该触发渲染"
     await pkg.plugin.on_stop()
 
 
@@ -413,21 +455,17 @@ async def test_help_format_markdown_on_onebot(loaded_plugin, monkeypatch):
     await pkg.plugin.on_stop()
 
 
-async def test_help_image_failure_disables_media(loaded_plugin, monkeypatch):
+async def test_help_image_send_failure_blocks_media(loaded_plugin, monkeypatch):
     pkg, registry, runtime = await _prepare(loaded_plugin, monkeypatch)
-    calls: list[str] = []
-
-    async def fake_render(html, **kwargs):
-        calls.append("render")
-        return b"png"
+    _install_fake_card_module(monkeypatch)
+    service = _ImageService(result=False)
 
     async def boom(*_args, **_kwargs):
-        raise RuntimeError("MediaUploadError: 上传官方富媒体失败：富媒体文件下载失败")
+        raise RuntimeError("MediaUploadError: 上传官方富媒体失败")
 
-    monkeypatch.setattr(runtime.cards, "render_html", fake_render)
     monkeypatch.setattr(runtime.ctx, "send_image", boom)
 
-    result = await registry.commands["b站监控"].handler(_Ctx("help"))
+    result = await registry.commands["b站监控"].handler(_Ctx("help", service=service))
 
     assert isinstance(result, str) and "/b站管理" in result, "发图失败要退回文本"
     assert runtime.sender.media_blocked is True, "失败一次后本进程不再发图"

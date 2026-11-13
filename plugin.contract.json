@@ -64,6 +64,21 @@
         "title": "命令速查的呈现方式",
         "type": "string"
       },
+      "help_image_theme": {
+        "default": "default",
+        "description": "用本体内置卡片主题渲染命令速查图（与宿主 /help 同款），改主题名即可换配色。",
+        "single_line": true,
+        "title": "帮助卡片主题",
+        "type": "string"
+      },
+      "help_image_width": {
+        "default": 760,
+        "description": "渲染成图片时的宽度（像素）。",
+        "maximum": 1200,
+        "minimum": 480,
+        "title": "帮助卡片宽度",
+        "type": "integer"
+      },
       "include_link": {
         "default": true,
         "title": "附带原文链接",
@@ -250,7 +265,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.4"
+    "version": "1.0.5"
   },
   "resources": [],
   "schema_version": 1

@@ -392,55 +392,28 @@ def help_markdown(*, version: str = "") -> str:
     return "\n".join(lines).rstrip()
 
 
-def help_html(*, version: str = "") -> str:
-    """命令速查卡片：自包含 HTML，交给本体截图端口渲染成图片。"""
-    blocks: list[str] = []
-    for title, color, items in HELP_GROUPS:
-        rows = "".join(
-            f'<div class="row"><code>{html_escape(syntax)}</code>'
-            f'<span class="desc">{html_escape(desc)}</span></div>'
-            for syntax, desc in items
-        )
+def help_blocks(version: str = "") -> list[dict[str, object]]:
+    """命令速查的**卡片区块**：交给本体内置的 `render_card_html` 渲染。
+
+    不再自带一整套 CSS：用宿主 /help 同款卡片 DSL（heading / rows / note），
+    主题、字体、配色都跟着本体走，本体换主题插件自动跟着变。
+    """
+    blocks: list[dict[str, object]] = []
+    for title, _color, items in HELP_GROUPS:
+        blocks.append({"kind": "heading", "text": title})
         blocks.append(
-            f'<section class="group">'
-            f'<h2 style="border-left-color:{color}">{html_escape(title)}</h2>'
-            f"{rows}</section>"
+            {
+                "kind": "rows",
+                "columns": ["命令", "作用"],
+                "widths": ["46%", "54%"],
+                "rows": [[syntax, desc] for syntax, desc in items],
+            }
         )
-    version_text = f"v{html_escape(version)}" if version else ""
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8" />
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ width: 760px; background: #f4f6f9;
-          font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2430; }}
-  .card {{ margin: 14px; background: #fff; border-radius: 18px; overflow: hidden;
-           box-shadow: 0 6px 24px rgba(16, 24, 40, .10); }}
-  .head {{ padding: 22px 24px; color: #fff;
-           background: linear-gradient(135deg, #00A1D6 0%, #7C4DFF 100%); }}
-  .head h1 {{ font-size: 22px; font-weight: 700; letter-spacing: .5px; }}
-  .head p {{ font-size: 12.5px; opacity: .9; margin-top: 6px; }}
-  .body {{ padding: 18px 22px 22px; }}
-  .group + .group {{ margin-top: 16px; }}
-  .group h2 {{ font-size: 15px; font-weight: 700; color: #16181c; padding-left: 10px;
-               border-left: 4px solid #00A1D6; margin-bottom: 8px; }}
-  .row {{ display: flex; align-items: baseline; gap: 12px; padding: 7px 10px;
-          border-radius: 8px; }}
-  .row:nth-child(odd) {{ background: #f7f9fc; }}
-  code {{ flex: 0 0 auto; font-family: Consolas, "Courier New", monospace;
-          font-size: 13px; color: #0b7285; background: #e8f4f8;
-          border-radius: 6px; padding: 3px 8px; }}
-  .desc {{ font-size: 13px; color: #5a6472; line-height: 1.5; }}
-  .foot {{ padding: 0 24px 18px; font-size: 11.5px; color: #98a2b3;
-           display: flex; justify-content: space-between; }}
-</style></head>
-<body><div class="card">
-  <div class="head">
-    <h1>B 站监控助手 · 命令速查</h1>
-    <p>群里先 @机器人，命令前缀默认 / · 分三类权限：所有人 / 管理员 / 超级管理员</p>
-  </div>
-  <div class="body">{''.join(blocks)}</div>
-  <div class="foot"><span>bili_monitor</span><span>{version_text}</span></div>
-</div></body></html>"""
+    hint = "群聊里先 @机器人；命令前缀默认 /"
+    if version:
+        hint += f" · bili_monitor v{version}"
+    blocks.append({"kind": "note", "text": hint})
+    return blocks
 
 
 __all__ = [
@@ -451,7 +424,7 @@ __all__ = [
     "build_fields",
     "card_html",
     "describe_template_fields",
-    "help_html",
+    "help_blocks",
     "help_markdown",
     "help_text",
     "render_text",
