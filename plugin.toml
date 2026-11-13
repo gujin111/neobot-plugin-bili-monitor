@@ -1,5 +1,5 @@
 name = "bili_monitor"
-version = "1.0.8"
+version = "1.0.9"
 description = "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）"
 author = "bili_monitor contributors"
 license = "MIT"
@@ -32,6 +32,15 @@ send_mode = "auto"
 include_link = true
 # 同时监控的 UP 主上限
 max_subscriptions = 30
+# 文案模板：留空用内置文案；占位符见 /b站管理 tpl <uid> <类别> ?
+template_dynamic_new = ""
+template_dynamic_repost = ""
+template_dynamic_video = ""
+template_dynamic_article = ""
+template_dynamic_audio = ""
+template_live_on = ""
+template_live_off = ""
+template_follower = ""
 
 [sdk]
 version = 1

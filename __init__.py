@@ -56,7 +56,7 @@ from .bili_store import (
 )
 
 PLUGIN_NAME = "bili_monitor"
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 
 plugin = Plugin(
     PLUGIN_NAME,

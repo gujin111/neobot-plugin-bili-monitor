@@ -81,3 +81,47 @@ class BiliMonitorConfig(BaseModel):
     max_subscriptions: int = Field(
         default=30, title="订阅上限", description="同时监控的 UP 主数量上限。", ge=1, le=200,
     )
+
+    # ---------------------------------------------------------------- 文案模板
+    # 留空 = 用内置文案；占位符见 `/b站管理 tpl <uid> <类别> ?`
+    # 单个订阅还可以用 `/b站管理 tpl` 覆盖这里的全局模板
+    template_dynamic_new: str = Field(
+        default="", title="文案：发布新动态",
+        description="留空用内置文案。可用 {name} {title} {text} {link} {url} {time}",
+        json_schema_extra={"single_line": True},
+    )
+    template_dynamic_repost: str = Field(
+        default="", title="文案：转发动态",
+        description="同上；另可用 {orig_author} {orig_text} {orig_title}",
+        json_schema_extra={"single_line": True},
+    )
+    template_dynamic_video: str = Field(
+        default="", title="文案：投稿新视频",
+        description="同上；另可用 {duration} {play_text} {bvid}",
+        json_schema_extra={"single_line": True},
+    )
+    template_dynamic_article: str = Field(
+        default="", title="文案：发布新专栏",
+        description="同上；{title} 是专栏标题",
+        json_schema_extra={"single_line": True},
+    )
+    template_dynamic_audio: str = Field(
+        default="", title="文案：发布新音频",
+        description="同上",
+        json_schema_extra={"single_line": True},
+    )
+    template_live_on: str = Field(
+        default="", title="文案：开播提醒",
+        description="同上；另可用 {area} {online_text} {room_id}",
+        json_schema_extra={"single_line": True},
+    )
+    template_live_off: str = Field(
+        default="", title="文案：下播提醒",
+        description="同上；另可用 {duration_text} {peak_text}",
+        json_schema_extra={"single_line": True},
+    )
+    template_follower: str = Field(
+        default="", title="文案：粉丝里程碑",
+        description="同上；可用 {follower_text} {milestone_text}",
+        json_schema_extra={"single_line": True},
+    )

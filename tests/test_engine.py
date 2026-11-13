@@ -391,20 +391,23 @@ async def test_text_mode_has_no_image_segments(engine_mod, store_mod):
     assert [seg for seg in chain.segments if seg.type == "image"] == []
 
 
-async def test_image_mode_downloads_then_uploads_images(engine_mod, store_mod):
+async def test_image_mode_inlines_image_into_one_message(engine_mod, store_mod):
+    """图片以 base64 内联进同一条消息链，不再单独发一条。"""
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
     engine = build_engine(engine_mod, store, api, sender, make_config())
     sub = make_sub(store_mod)
     sub.send_mode = "image"
     event = _event_from(engine_mod, api)
+
     await engine._dispatch(sub, event)
 
-    # 文本链里不再塞 URL，图片由插件自己下载后按字节发
+    assert len(sender.sent) == 1, "只发一条消息"
+    assert sender.images == [], "不再单独发图片消息"
     chain = sender.sent[0][2]
-    assert [seg for seg in chain.segments if seg.type == "image"] == []
-    assert len(sender.images) == 1
-    assert sender.images[0][2].startswith(b"\xff\xd8")
-    assert api.downloaded == ["https://i0.hdslb.com/p.jpg"]
+    images = [seg for seg in chain.segments if seg.type == "image"]
+    assert len(images) == 1
+    assert images[0].data["file"].startswith("base64://")
+    assert chain.plain_text.strip(), "同一条消息里还带着文案"
 
 
 async def test_image_download_failure_keeps_text(engine_mod, store_mod):
@@ -417,23 +420,31 @@ async def test_image_download_failure_keeps_text(engine_mod, store_mod):
     await engine._dispatch(sub, _event_from(engine_mod, api))
 
     assert len(sender.sent) == 1, "文本照发"
-    assert sender.images == [], "下载失败就跳过图片，不报错"
+    assert [s for s in sender.sent[0][2].segments if s.type == "image"] == []
 
 
-async def test_image_upload_failure_keeps_text(engine_mod, store_mod):
+async def test_image_send_failure_falls_back_to_text(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
     engine = build_engine(engine_mod, store, api, sender, make_config())
     sub = make_sub(store_mod)
     sub.send_mode = "image"
 
-    async def boom(*_args, **_kwargs):
-        raise RuntimeError("官方富媒体上传失败")
+    calls = {"n": 0}
+    original = sender.send_chain
 
-    sender.send_image = boom  # type: ignore[assignment]
+    async def flaky(kind, target_id, chain, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("官方富媒体上传失败")
+        return await original(kind, target_id, chain, **kwargs)
+
+    sender.send_chain = flaky  # type: ignore[assignment]
 
     await engine._dispatch(sub, _event_from(engine_mod, api))
 
-    assert len(sender.sent) == 1, "图片上传失败也要保住文本提醒"
+    assert calls["n"] == 2, "带图失败后重发纯文本"
+    assert [s for s in sender.sent[-1][2].segments if s.type == "image"] == []
+    assert engine._media_blocked is True
 
 
 async def test_media_mode_never_disables_images(engine_mod, store_mod):
@@ -445,7 +456,7 @@ async def test_media_mode_never_disables_images(engine_mod, store_mod):
     await engine._dispatch(sub, _event_from(engine_mod, api))
 
     assert len(sender.sent) == 1
-    assert sender.images == []
+    assert [s for s in sender.sent[0][2].segments if s.type == "image"] == []
 
 
 async def test_media_mode_always_forces_images_on_official(engine_mod, store_mod):
@@ -458,61 +469,34 @@ async def test_media_mode_always_forces_images_on_official(engine_mod, store_mod
 
     await engine._dispatch(sub, _event_from(engine_mod, api))
 
-    assert len(sender.images) == 1
+    assert [s for s in sender.sent[0][2].segments if s.type == "image"]
 
 
-async def test_link_defaults_to_html_anchor_on_official(engine_mod, store_mod):
-    """官方通道默认用 <a> 锚点：显示「点击进入直播间」，不露网址。"""
+async def test_panel_template_is_used_by_default(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.channel = "official"
-    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    engine = build_engine(engine_mod, store, api, sender,
+                          make_config(template_live_on="【自定义】{name} 开播：{title}"))
     sub = make_sub(store_mod)
     sub.send_mode = "text"
 
     await engine._dispatch(sub, _live_event(engine_mod))
 
     text = sender.sent[0][2].plain_text
-    assert '<a href="https://live.bilibili.com/555" target="_blank" rel="noopener noreferrer">点击进入直播间</a>' in text
-    assert "点击进入直播间：https" not in text
+    assert text.startswith("【自定义】老番茄 开播：")
+    assert "【开播提醒】" not in text
 
 
-async def test_link_defaults_to_bare_url_on_onebot(engine_mod, store_mod):
+async def test_subscription_template_overrides_panel(engine_mod, store_mod):
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.channel = "onebot"
-    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="auto"))
+    engine = build_engine(engine_mod, store, api, sender,
+                          make_config(template_live_on="【面板】{name}"))
     sub = make_sub(store_mod)
     sub.send_mode = "text"
+    sub.set_template("live_on", "【订阅】{name}")
 
     await engine._dispatch(sub, _live_event(engine_mod))
 
-    text = sender.sent[0][2].plain_text
-    assert "点击进入直播间：https://live.bilibili.com/555" in text
-    assert "<a href" not in text
-
-
-async def test_link_style_url_is_opt_in(engine_mod, store_mod):
-    store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    sender.channel = "official"
-    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="url"))
-    sub = make_sub(store_mod)
-    sub.send_mode = "text"
-
-    await engine._dispatch(sub, _live_event(engine_mod))
-
-    text = sender.sent[0][2].plain_text
-    assert "点击进入直播间：https://live.bilibili.com/555" in text
-    assert "[点击进入直播间]" not in text
-
-
-async def test_link_style_markdown_is_opt_in(engine_mod, store_mod):
-    store, api, sender = FakeStore(), FakeApi(), FakeSender()
-    engine = build_engine(engine_mod, store, api, sender, make_config(link_style="markdown"))
-    sub = make_sub(store_mod)
-    sub.send_mode = "text"
-
-    await engine._dispatch(sub, _live_event(engine_mod))
-
-    assert "[点击进入直播间](https://live.bilibili.com/555)" in sender.sent[0][2].plain_text
+    assert sender.sent[0][2].plain_text.startswith("【订阅】老番茄")
 
 
 async def test_official_channel_never_sends_images(engine_mod, store_mod):
@@ -552,22 +536,31 @@ async def test_official_channel_skips_card_mode(engine_mod, store_mod):
 
 
 async def test_media_failure_blocks_following_images(engine_mod, store_mod):
+    """带图消息发送失败一次后熔断，后续只发文字。"""
     store, api, sender = FakeStore(), FakeApi(), FakeSender()
     engine = build_engine(engine_mod, store, api, sender, make_config())
     sub = make_sub(store_mod)
     sub.send_mode = "image"
+    calls = {"n": 0}
+    original = sender.send_chain
 
-    async def boom(*_args, **_kwargs):
-        raise RuntimeError("MediaUploadError: 上传官方富媒体失败")
+    async def flaky(kind, target_id, chain, **kwargs):
+        calls["n"] += 1
+        if any(seg.type == "image" for seg in chain.segments):
+            raise RuntimeError("MediaUploadError: 上传官方富媒体失败")
+        return await original(kind, target_id, chain, **kwargs)
 
-    sender.send_image = boom  # type: ignore[assignment]
+    sender.send_chain = flaky  # type: ignore[assignment]
 
     await engine._dispatch(sub, _event_from(engine_mod, api))
+    assert engine._media_blocked is True, "失败一次后熔断，不再尝试发图"
+
+    downloaded_before = len(getattr(api, "downloaded", []))
     store.claimed.clear()
     await engine._dispatch(sub, _event_from(engine_mod, api))
 
-    assert len(sender.sent) == 2, "两条提醒的文本都要发出去"
-    assert engine._media_blocked is True, "失败一次后熔断，不再尝试发图"
+    assert calls["n"] == 3, "第一条：带图失败 + 纯文本重发；第二条：只发文本"
+    assert len(getattr(api, "downloaded", [])) == downloaded_before, "熔断后不再下载图片"
 
 
 def _event_from(engine_mod, api):

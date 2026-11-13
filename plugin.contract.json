@@ -58,6 +58,62 @@
         ],
         "title": "发送模式",
         "type": "string"
+      },
+      "template_dynamic_article": {
+        "default": "",
+        "description": "同上；{title} 是专栏标题",
+        "single_line": true,
+        "title": "文案：发布新专栏",
+        "type": "string"
+      },
+      "template_dynamic_audio": {
+        "default": "",
+        "description": "同上",
+        "single_line": true,
+        "title": "文案：发布新音频",
+        "type": "string"
+      },
+      "template_dynamic_new": {
+        "default": "",
+        "description": "留空用内置文案。可用 {name} {title} {text} {link} {url} {time}",
+        "single_line": true,
+        "title": "文案：发布新动态",
+        "type": "string"
+      },
+      "template_dynamic_repost": {
+        "default": "",
+        "description": "同上；另可用 {orig_author} {orig_text} {orig_title}",
+        "single_line": true,
+        "title": "文案：转发动态",
+        "type": "string"
+      },
+      "template_dynamic_video": {
+        "default": "",
+        "description": "同上；另可用 {duration} {play_text} {bvid}",
+        "single_line": true,
+        "title": "文案：投稿新视频",
+        "type": "string"
+      },
+      "template_follower": {
+        "default": "",
+        "description": "同上；可用 {follower_text} {milestone_text}",
+        "single_line": true,
+        "title": "文案：粉丝里程碑",
+        "type": "string"
+      },
+      "template_live_off": {
+        "default": "",
+        "description": "同上；另可用 {duration_text} {peak_text}",
+        "single_line": true,
+        "title": "文案：下播提醒",
+        "type": "string"
+      },
+      "template_live_on": {
+        "default": "",
+        "description": "同上；另可用 {area} {online_text} {room_id}",
+        "single_line": true,
+        "title": "文案：开播提醒",
+        "type": "string"
       }
     },
     "title": "BiliMonitorConfig",
@@ -130,7 +186,7 @@
   "plugin": {
     "description": "B 站 UP 主动态 / 开播 / 粉丝里程碑监控（移植自 bili 监控助手 1.7.20）",
     "name": "bili_monitor",
-    "version": "1.0.8"
+    "version": "1.0.9"
   },
   "resources": [],
   "schema_version": 1

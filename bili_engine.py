@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import random
@@ -30,7 +31,7 @@ from .bili_model import (
     parse_dynamic_item,
 )
 from .bili_notify import OFFICIAL, media_allowed
-from .bili_render import build_chain, link_chain, render_text
+from .bili_render import TEMPLATE_FIELDS, build_chain, link_chain, render_text
 from .bili_store import BiliStore, Subscription
 
 #: 单次轮询里个别订阅失败后的冷却（秒）：指数退避，上限 30 分钟
@@ -364,7 +365,7 @@ class MonitorEngine:
                                              f"{event.kind} {event.title or event.text[:40]}"):
             return True
         self.stats["events"] += 1
-        custom = sub.template_map
+        custom = self._custom_templates(sub)
         ok = True
         for kind, target_id in targets:
             try:
@@ -422,7 +423,7 @@ class MonitorEngine:
                         await self._send_link(kind, target_id, event, **kwargs)
                     return True
 
-        # 文本永远单独发；图片改为「自己下载 + 字节上传」，不再把 URL 交给通道
+        # 文本 + 配图合成**一条**消息：图片下载成 base64 内联，不再把 URL 交给通道
         chain = build_chain(
             event, custom=custom,
             include_link=bool(self._config.include_link),
@@ -431,34 +432,54 @@ class MonitorEngine:
             with_images=False,
             link_style=self._link_style(),
         )
+        if mode == "image":
+            for url in await self._inline_images(event):
+                chain.image(file=url)
         await self._gate()
-        sent = await self._sender.send_chain(kind, target_id, chain, **kwargs)
-        if sent and mode in {"image", "card"}:
-            await self._send_images(kind, target_id, event, **kwargs)
-        return sent
+        try:
+            return await self._sender.send_chain(kind, target_id, chain, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - 带图发失败就退回纯文本，别丢提醒
+            if mode != "image":
+                raise
+            self._block_media(f"图文合并发送失败：{exc}")
+            fallback = build_chain(
+                event, custom=custom,
+                include_link=bool(self._config.include_link),
+                at_all=at_all,
+                at_ids=tuple(sub.at_ids),
+                with_images=False,
+                link_style=self._link_style(),
+            )
+            await self._gate()
+            return await self._sender.send_chain(kind, target_id, fallback, **kwargs)
 
-    async def _send_images(self, kind: str, target_id: str, event: MonitorEvent,
-                           **kwargs: Any) -> int:
-        """下载原图后按字节发送；单张失败只跳过，不影响整条提醒。"""
+    async def _inline_images(self, event: MonitorEvent) -> list[str]:
+        """把原图下载成 ``base64://``，供同一消息链内联发送。"""
         if not self._media_enabled():
-            return 0
-        limit = max(0, int(getattr(self._config, "max_images", 2) or 0))
+            return []
+        limit = max(0, int(cfg(self._config, "max_images") or 0))
         if not limit:
-            return 0
-        sent = 0
+            return []
+        inline: list[str] = []
         for url in event.images[:limit]:
             data = await self._api.download_image(url)
             if not data:
                 self._log("warning", f"图片下载失败，跳过：{url[:60]}")
                 continue
-            try:
-                await self._gate()
-                await self._sender.send_image(kind, target_id, data, "bili.jpg", **kwargs)
-                sent += 1
-            except Exception as exc:  # noqa: BLE001 - 单张失败不影响文本
-                self._block_media(f"图片上传失败：{exc}")
+            inline.append("base64://" + base64.b64encode(data).decode("ascii"))
+            if len(inline) >= limit:
                 break
-        return sent
+        return inline
+
+    def _custom_templates(self, sub: Subscription) -> dict[str, str]:
+        """合并文案模板：面板里的全局模板打底，订阅级 	pl 覆盖。"""
+        merged: dict[str, str] = {}
+        for kind in TEMPLATE_FIELDS:
+            value = str(getattr(self._config, f"template_{kind}", "") or "").strip()
+            if value:
+                merged[kind] = value
+        merged.update({k: v for k, v in sub.template_map.items() if v})
+        return merged
 
     def _media_enabled(self) -> bool:
         """能不能发图片：熔断标记 + `media_mode` + 通道。"""
@@ -585,7 +606,7 @@ class MonitorEngine:
             extra={"room_id": sub.room_id or ""},
         )
         # 测试提醒是命令触发的，还在被动回复窗口里，按被动消息发即可
-        return await self._send(sub, event, kind, target_id, sub.template_map, proactive=False)
+        return await self._send(sub, event, kind, target_id, self._custom_templates(sub), proactive=False)
 
     async def preview_text(self, sub: Subscription, kind: str) -> str:
         """给配置命令回显一版示例文案。"""
@@ -602,7 +623,7 @@ class MonitorEngine:
                    "follower": 12345, "milestone": 10000, "peak_online": 45678,
                    "peak": 45678, "online": 1234, "play": 98765, "room_id": sub.room_id or 0},
         )
-        return render_text(event, custom=sub.template_map, include_link=bool(self._config.include_link))
+        return render_text(event, custom=self._custom_templates(sub), include_link=bool(self._config.include_link))
 
     def snapshot(self) -> dict[str, Any]:
         return dict(self.stats)
